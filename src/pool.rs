@@ -1,16 +1,20 @@
 use std::sync::mpsc;
+use std::thread;
 
 use itertools;
 
 use task::Task;
-use worker::{Worker,Config};
+use worker::{Worker,Config,ShareStrategy};
 
 pub struct ThreadPool {
     workers: Vec<Worker>,
 }
 
 impl ThreadPool {
-    pub fn new(num_threads: usize) -> Result<ThreadPool, ()> {
+    pub fn new(num_threads:    usize,
+               task_capcity:   usize,
+               share_strategy: ShareStrategy) -> Result<ThreadPool, ()> {
+        assert!(num_threads > 0);
 
         let mut channels = make_channels(num_threads);
         let mut workers: Vec<Worker> = Vec::new();
@@ -18,14 +22,28 @@ impl ThreadPool {
         for n in 0..num_threads {
             let new_chans = channels.split_off(num_threads);
 
-            workers.push(Worker::new(Config{ index: n,
-                                             task_capacity: 64,
-                                             channels: channels }));
+            workers.push(Worker::new(Config{ index:          n,
+                                             task_capacity:  task_capcity,
+                                             share_strategy: share_strategy,
+                                             channels:       channels }));
 
             channels = new_chans;
         }
         
         Ok(ThreadPool{ workers })
+    }
+
+    pub fn run(mut self) {
+        let new_workers = self.workers.split_off(1);
+
+        for worker in new_workers.into_iter() {
+            thread::spawn(move || {
+                worker.main();
+            });
+        }
+
+        let worker = self.workers.pop().unwrap();
+        worker.main();
     }
 }
 
@@ -43,8 +61,8 @@ macro_rules! filter {
 
 fn make_channels(num_threads: usize) -> Vec<(mpsc::Sender<bool>,
                                              mpsc::Receiver<bool>,
-                                             mpsc::Sender<bool>,
-                                             mpsc::Receiver<bool>,
+                                             mpsc::Sender<usize>,
+                                             mpsc::Receiver<usize>,
                                              mpsc::Sender<Task>,
                                              mpsc::Receiver<Task>)> {
     let get_yx = |n: usize, row_size: usize| -> (usize, usize) {
@@ -68,11 +86,11 @@ fn make_channels(num_threads: usize) -> Vec<(mpsc::Sender<bool>,
 
     let ntsq = num_threads * num_threads;
     
-    // Model the channels as an nxn matrix.
+    // Model the channels as several NxN matrices.
     let mut rqst_tx = Vec::<Option<mpsc::Sender<bool>>>::with_capacity(ntsq);
     let mut rqst_rx = Vec::<Option<mpsc::Receiver<bool>>>::with_capacity(ntsq);
-    let mut resp_tx = Vec::<Option<mpsc::Sender<bool>>>::with_capacity(ntsq);
-    let mut resp_rx = Vec::<Option<mpsc::Receiver<bool>>>::with_capacity(ntsq);
+    let mut resp_tx = Vec::<Option<mpsc::Sender<usize>>>::with_capacity(ntsq);
+    let mut resp_rx = Vec::<Option<mpsc::Receiver<usize>>>::with_capacity(ntsq);
     let mut jobs_tx = Vec::<Option<mpsc::Sender<Task>>>::with_capacity(ntsq);
     let mut jobs_rx = Vec::<Option<mpsc::Receiver<Task>>>::with_capacity(ntsq);
     
@@ -90,7 +108,7 @@ fn make_channels(num_threads: usize) -> Vec<(mpsc::Sender<bool>,
                 let (tx, rx) = mpsc::channel::<bool>();
                 rqst_tx.push(Some(tx));
                 rqst_rx.push(Some(rx));
-                let (tx, rx) = mpsc::channel::<bool>();
+                let (tx, rx) = mpsc::channel::<usize>();
                 resp_tx.push(Some(tx));
                 resp_rx.push(Some(rx));
                 let (tx, rx) = mpsc::channel::<Task>();
@@ -100,6 +118,7 @@ fn make_channels(num_threads: usize) -> Vec<(mpsc::Sender<bool>,
         }
     }
 
+    // Give one part of each channel to its corresponding thread.
     for n in 0..ntsq {
         if is_lower_left(n, num_threads) {
             rqst_rx.swap(n, transpose_n(n, num_threads));
@@ -108,6 +127,8 @@ fn make_channels(num_threads: usize) -> Vec<(mpsc::Sender<bool>,
         }
     }
 
+    // Remove all Nones and remove each channel pair from its
+    // Option container.
     filter!(rqst_tx, rqst_rx,
             resp_tx, resp_rx,
             jobs_tx, jobs_rx);
