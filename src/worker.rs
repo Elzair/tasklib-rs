@@ -25,7 +25,7 @@ pub struct Config {
 }
 
 pub struct Worker {
-    index:          usize,
+    pub index:      usize,
     channel_length: usize,
     start_idx:      usize,
     share_strategy: ShareStrategy,
@@ -84,14 +84,14 @@ impl Worker {
         }
     }
 
-    pub fn main(mut self) {
+    pub fn run(&mut self) {
         loop {
             // Popping the task first ensures this Worker does not
             // give away its only task.
             match self.tasks.pop_front() {
                 Some(task) => {
                     self.process_requests();
-                    //self.execute(task);
+                    self.execute(task);
                 },
                 None => {
                     self.acquire_tasks();
@@ -100,19 +100,24 @@ impl Worker {
         }
     }
 
+    fn execute(&self, task: Task) {
+        task.call_box();
+    }
+
     fn acquire_tasks(&mut self) {
-        let mut done = false;
+        let mut got_tasks = false;
         
-        while !done {
+        while !got_tasks {
             let ridx = self.rand_index();
             
             self.send_requests[ridx].send(true).unwrap();
 
             let num_jobs = self.get_responses[ridx].recv().unwrap();
 
+            #[allow(unused_variables)]
             for n in 0..num_jobs {
-                done = true;
                 self.tasks.push_back(self.get_tasks[ridx].recv().unwrap());
+                got_tasks = true;
             }
         }
     }
@@ -140,7 +145,7 @@ impl Worker {
         match self.share_strategy {
             ShareStrategy::ONE => {
                 self.send_responses[idx].send(1).unwrap();
-                self.send_tasks[idx].send(self.tasks.pop_front().unwrap());
+                self.send_tasks[idx].send(self.tasks.pop_front().unwrap()).unwrap();
             },
             ShareStrategy::HALF => {
                 let half_len = self.tasks.len() / 2;

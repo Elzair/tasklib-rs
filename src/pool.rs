@@ -7,7 +7,7 @@ use task::Task;
 use worker::{Worker,Config,ShareStrategy};
 
 pub struct ThreadPool {
-    workers: Vec<Worker>,
+    workers: Option<Vec<Worker>>,
 }
 
 impl ThreadPool {
@@ -30,20 +30,26 @@ impl ThreadPool {
             channels = new_chans;
         }
         
-        Ok(ThreadPool{ workers })
+        Ok(ThreadPool{ workers: Some(workers) })
     }
 
-    pub fn run(mut self) {
-        let new_workers = self.workers.split_off(1);
+    pub fn run(&mut self) {
+        assert!(self.workers.is_some());
+        let mut workers = self.workers.take().unwrap();
+        let new_workers = workers.split_off(1);
+       
+        let handles = new_workers.into_iter()
+            .map(|mut worker| {
+                thread::spawn(move || {
+                    worker.run();
+                })
+            }).collect::<Vec<_>>();
 
-        for worker in new_workers.into_iter() {
-            thread::spawn(move || {
-                worker.main();
-            });
+        workers.pop().unwrap().run();
+
+        for handle in handles.into_iter() {
+            handle.join().expect("Could not join child thread");
         }
-
-        let worker = self.workers.pop().unwrap();
-        worker.main();
     }
 }
 
