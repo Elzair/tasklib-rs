@@ -4,3 +4,8 @@ version = "0.1.0"
 authors = ["Philip Woods <elzairthesorcerer@gmail.com>"]
 
 [dependencies]
+spmc                   = "0.2.2"
+# sqa-bounded-spsc-queue = "0.2.1"
+single_value_channel   = "1.1.0"
+rand                   = "^0.3"
+itertools              = "^0.6"
