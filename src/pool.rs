@@ -66,10 +66,6 @@ fn make_channels(num_threads: usize) -> Vec<(mpsc::Sender<bool>,
         x * row_size + y 
     };
 
-    // let get_n = |y: usize, x: usize, row_size: usize| {
-    //     y * row_size + x
-    // };
-
     let ntsq = num_threads * num_threads;
     
     // Model the channels as an nxn matrix.
@@ -103,23 +99,6 @@ fn make_channels(num_threads: usize) -> Vec<(mpsc::Sender<bool>,
             }
         }
     }
-
-    // let coords =
-    //     (0..ntsq).map(|n| {
-    //         (n / num_threads, n % num_threads)
-    //     }).filter(|&(y, x)| {
-    //         y > x
-    //     }).collect::<Vec<_>>();
-
-    
-    // for &(y, x) in coords.iter() {
-    //     rqst_rx.swap(get_n(y, x, num_threads),
-    //                  get_n(x, y, num_threads));
-    //     resp_tx.swap(get_n(y, x, num_threads),
-    //                  get_n(x, y, num_threads));
-    //     jobs_rx.swap(get_n(y, x, num_threads),
-    //                  get_n(x, y, num_threads));
-    // }
 
     for n in 0..ntsq {
         if is_lower_left(n, num_threads) {
