@@ -6,6 +6,7 @@ extern crate rand;
 pub mod task;
 mod worker;
 pub mod pool;
+mod channel;
 
 #[derive(Clone, Copy)]
 pub enum ShareStrategy {
