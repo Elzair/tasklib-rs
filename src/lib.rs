@@ -1,4 +1,5 @@
 
+extern crate spmc;
 extern crate itertools;
 extern crate rand;
 
@@ -6,9 +7,21 @@ pub mod task;
 mod worker;
 pub mod pool;
 
+#[derive(Clone, Copy)]
+pub enum ShareStrategy {
+    ONE,
+    HALF,
+}
+
+#[derive(Clone, Copy)]
+pub enum Initiated {
+    SENDER,
+    RECEIVER,
+}
+
 pub use task::Task;
-pub use worker::ShareStrategy;
 pub use pool::ThreadPool;
+pub use worker::Worker;
 
 #[cfg(test)]
 mod tests {
