@@ -279,38 +279,108 @@ mod tests {
 
     #[test]
     fn test_make_channels_shared() {
-        let (resp_tx, resp_rx, jobs_tx, jobs_rx) = make_channels_shared(NT);
+        let (resp_tx, resp_rx,
+             jobs_tx, jobs_rx) = make_channels_shared(NT);
         assert!(resp_tx.len() == NT);
         assert!(resp_rx.len() == NT);
         assert!(jobs_tx.len() == NT);
         assert!(jobs_rx.len() == NT);
+
+        for v in resp_tx.iter() {
+            assert!(v.len() == NT-1);
+        }
+
+        for v in resp_rx.iter() {
+            assert!(v.len() == NT-1);
+        }
+        
+        for v in jobs_tx.iter() {
+            assert!(v.len() == NT-1);
+        }
+
+        for v in jobs_rx.iter() {
+            assert!(v.len() == NT-1);
+        }
     }
 
     #[test]
     fn test_make_channels_ri() {
-        #[allow(unused_variables)]
-        let data = make_channels_ri(NT);
-        assert!(true);
+        let (rqst_tx, rqst_rx) = make_channels_ri(NT);
+
+        assert!(rqst_tx.len() == NT);
+        assert!(rqst_rx.len() == NT);
+
+        for v in rqst_tx.iter() {
+            assert!(v.len() == NT-1);
+        }
+
+        for v in rqst_rx.iter() {
+            assert!(v.len() == NT-1);
+        }
     }
 
     #[test]
     fn test_make_channels_si() {
-        #[allow(unused_variables)]
-        let data = make_channels_si(NT);
-        assert!(true);
+        let (rqst_tx, rqst_rx) = make_channels_si(NT);
+
+        assert!(rqst_tx.len() == NT);
+        assert!(rqst_rx.len() == NT);
+
+        for v in rqst_rx.iter() {
+            assert!(v.len() == NT-1);
+        }
     }
 
     #[test]
     fn test_make_ri() {
-        #[allow(unused_variables)]
         let data = make_channels(NT, Initiated::RECEIVER);
-        assert!(true);
+
+        assert!(data.len() == NT);
+
+        for datum in data.into_iter() {
+            match datum {
+                Data::Receiver {
+                    send_requests, get_requests,
+                    send_responses, get_responses,
+                    send_tasks, get_tasks,
+                } => {
+                    assert!(send_requests.len() == NT-1);
+                    assert!(get_requests.len() == NT-1);
+                    assert!(send_responses.len() == NT-1);
+                    assert!(get_responses.len() == NT-1);
+                    assert!(send_tasks.len() == NT-1);
+                    assert!(get_tasks.len() == NT-1);
+                },
+                Data::Sender { .. } => {
+                    assert!(false);
+                }
+            }
+        }
     }
 
     #[test]
     fn test_make_si() {
-        #[allow(unused_variables)]
         let data = make_channels(NT, Initiated::SENDER);
-        assert!(true);
+
+        assert!(data.len() == NT);
+
+        for datum in data.into_iter() {
+            match datum {
+                Data::Sender {
+                    get_requests,
+                    send_responses, get_responses,
+                    send_tasks, get_tasks, ..
+                } => {
+                    assert!(get_requests.len() == NT-1);
+                    assert!(send_responses.len() == NT-1);
+                    assert!(get_responses.len() == NT-1);
+                    assert!(send_tasks.len() == NT-1);
+                    assert!(get_tasks.len() == NT-1);
+                },
+                Data::Receiver { .. } => {
+                    assert!(false);
+                }
+            }
+        }
     }
 }
