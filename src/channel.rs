@@ -377,10 +377,162 @@ mod tests {
                     assert!(send_tasks.len() == NT-1);
                     assert!(get_tasks.len() == NT-1);
                 },
-                Data::Receiver { .. } => {
-                    assert!(false);
-                }
+                Data::Receiver { .. } => { assert!(false); },
             }
         }
+    }
+
+    #[test]
+    fn test_chans_ri() {
+        let mut data = make_channels(2, Initiated::RECEIVER);
+        let chan2 = data.pop().unwrap();
+        let chan1 = data.pop().unwrap();
+
+        match chan1 {
+            Data::Receiver {
+                ref send_requests, ..
+            } => {
+                send_requests[0].send(true).unwrap();
+            },
+            Data::Sender { .. } => { assert!(false); },
+        };
+
+        match chan2 {
+            Data::Receiver {
+                ref get_requests, ref send_responses, ref send_tasks, ..
+            } => {
+                let req = get_requests[0].recv().unwrap();
+                assert!(req == true);
+                send_responses[0].send(1).unwrap();
+                send_tasks[0].send(Box::new(|| {
+                    println!("Hello!");
+                }));
+            },
+            Data::Sender { .. } => { assert!(false); },
+        };
+
+        match chan1 {
+            Data::Receiver {
+                ref get_responses, ref get_tasks, ..
+            } => {
+                let res1 = get_responses[0].recv().unwrap();
+                assert!(res1 == 1);
+                let res2 = get_tasks[0].recv().unwrap();
+                res2.call_box();
+            },
+            Data::Sender { .. } => { assert!(false); },
+        };
+
+        match chan2 {
+            Data::Receiver {
+                ref send_requests, ..
+            } => {
+                send_requests[0].send(true).unwrap();
+            },
+            Data::Sender { .. } => { assert!(false); },
+        };
+
+        match chan1 {
+            Data::Receiver {
+                ref get_requests, ref send_responses, ref send_tasks, ..
+            } => {
+                let req = get_requests[0].recv().unwrap();
+                assert!(req == true);
+                send_responses[0].send(1).unwrap();
+                send_tasks[0].send(Box::new(|| {
+                    println!("World!");
+                }));
+            },
+            Data::Sender { .. } => { assert!(false); },
+        };
+
+        match chan2 {
+            Data::Receiver {
+                ref get_responses, ref get_tasks, ..
+            } => {
+                let res1 = get_responses[0].recv().unwrap();
+                assert!(res1 == 1);
+                let res2 = get_tasks[0].recv().unwrap();
+                res2.call_box();
+            },
+            Data::Sender { .. } => { assert!(false); },
+        };
+    }
+
+    #[test]
+    fn test_chans_si() {
+        let mut data = make_channels(2, Initiated::SENDER);
+        let chan2 = data.pop().unwrap();
+        let chan1 = data.pop().unwrap();
+
+        match chan1 {
+            Data::Sender {
+                ref send_requests, ..
+            } => {
+                send_requests.send(true).unwrap();
+            },
+            Data::Receiver { .. } => { assert!(false); },
+        };
+
+        match chan2 {
+            Data::Sender {
+                ref get_requests, ref send_responses, ref send_tasks, ..
+            } => {
+                let req = get_requests[0].recv().unwrap();
+                assert!(req == true);
+                send_responses[0].send(1).unwrap();
+                send_tasks[0].send(Box::new(|| {
+                    println!("Hello!");
+                }));
+            },
+            Data::Receiver { .. } => { assert!(false); },
+        };
+
+        match chan1 {
+            Data::Sender {
+                ref get_responses, ref get_tasks, ..
+            } => {
+                let res1 = get_responses[0].recv().unwrap();
+                assert!(res1 == 1);
+                let res2 = get_tasks[0].recv().unwrap();
+                res2.call_box();
+            },
+            Data::Receiver { .. } => { assert!(false); },
+        };
+
+        match chan2 {
+            Data::Sender {
+                ref send_requests, ..
+            } => {
+                send_requests.send(true).unwrap();
+            },
+            Data::Receiver { .. } => { assert!(false); },
+        };
+
+        match chan1 {
+            Data::Sender {
+                ref get_requests, ref send_responses, ref send_tasks, ..
+            } => {
+                let req = get_requests[0].recv().unwrap();
+                assert!(req == true);
+                send_responses[0].send(1).unwrap();
+                send_tasks[0].send(Box::new(|| {
+                    println!("World!");
+                }));
+            },
+            Data::Receiver { .. } => { assert!(false); },
+        };
+
+        match chan2 {
+            Data::Sender {
+                ref get_responses, ref get_tasks, ..
+            } => {
+                let res1 = get_responses[0].recv().unwrap();
+                assert!(res1 == 1);
+                let res2 = get_tasks[0].recv().unwrap();
+                res2.call_box();
+            },
+            Data::Receiver { .. } => { assert!(false); },
+        };
     }
 }
