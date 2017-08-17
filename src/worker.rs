@@ -107,8 +107,8 @@ impl Worker {
                     let num_tasks = get_responses[ridx].recv().unwrap();
 
                     for n in 0..num_tasks {
-                        self.tasks.borrow_mut() .push_back(get_tasks[ridx]
-                                                           .recv().unwrap());
+                        self.tasks.borrow_mut().push_back(get_tasks[ridx]
+                                                          .recv().unwrap());
                         got_tasks = true;
                     }
                 }

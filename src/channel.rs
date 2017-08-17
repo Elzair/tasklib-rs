@@ -1,24 +1,15 @@
 use std::sync::mpsc;
 
+use itertools;
 use spmc;
 
 use super::Initiated;
 use task::Task;
 
-macro_rules! filter {
-    ($vec_name:ident) => (
-        let $vec_name = $vec_name.into_iter()
-            .filter_map(|n| { n })
-            .collect::<Vec<_>>();
-    );
-    ($vec_name:ident, $($rest:ident),+) => (
-        filter!($vec_name); 
-        filter!($($rest),+);
-    )
-}
-
-pub enum Data {
-    Receiver {
+pub enum Data
+{
+    Receiver
+    {
         send_requests: Vec<mpsc::Sender<bool>>,
         get_requests: Vec<mpsc::Receiver<bool>>,
         send_responses: Vec<mpsc::Sender<usize>>,
@@ -26,9 +17,10 @@ pub enum Data {
         send_tasks: Vec<mpsc::Sender<Task>>,
         get_tasks: Vec<mpsc::Receiver<Task>>,
     },
-    Sender {
+    Sender
+    {
         send_requests: spmc::Sender<bool>,
-        get_requests:  Vec<spmc::Receiver<bool>>,
+        get_requests: Vec<spmc::Receiver<bool>>,
         send_responses: Vec<mpsc::Sender<usize>>,
         get_responses: Vec<mpsc::Receiver<usize>>,
         send_tasks: Vec<mpsc::Sender<Task>>,
@@ -37,14 +29,57 @@ pub enum Data {
 }
 
 pub fn make_channels(num_threads: usize,
-                     initiated: Initiated ) -> Vec<Data> {
+                     initiated: Initiated ) -> Vec<Data>
+{
+    let (resp_tx, resp_rx,
+         jobs_tx, jobs_rx) = make_channels_shared(num_threads);
+    
     match initiated {
-        Initiated::RECEIVER => make_channels_ri(num_threads),
-        Initiated::SENDER => make_channels_si(num_threads),
+        Initiated::RECEIVER => {
+            let (rqst_tx, rqst_rx) = make_channels_ri(num_threads);
+
+            itertools::multizip((rqst_tx, rqst_rx,
+                                 resp_tx, resp_rx,
+                                 jobs_tx, jobs_rx))
+                .map(|(send_requests, get_requests,
+                       send_responses, get_responses,
+                       send_tasks, get_tasks)| {
+                    Data::Receiver {
+                        send_requests: send_requests,
+                        get_requests: get_requests,
+                        send_responses: send_responses,
+                        get_responses: get_responses,
+                        send_tasks: send_tasks,
+                        get_tasks: get_tasks,
+                    }
+                }).collect::<Vec<Data>>()
+        },
+        Initiated::SENDER => {
+            let (rqst_tx, rqst_rx) = make_channels_si(num_threads);
+
+            itertools::multizip((rqst_tx, rqst_rx,
+                                 resp_tx, resp_rx,
+                                 jobs_tx, jobs_rx))
+                .map(|(send_requests, get_requests,
+                       send_responses, get_responses,
+                       send_tasks, get_tasks)| {
+                    Data::Sender {
+                        send_requests: send_requests,
+                        get_requests: get_requests,
+                        send_responses: send_responses,
+                        get_responses: get_responses,
+                        send_tasks: send_tasks,
+                        get_tasks: get_tasks,
+                    }
+                }).collect::<Vec<Data>>()
+        },
     }
 }
 
-fn make_channels_ri(num_threads: usize) -> Vec<Data> {
+fn make_channels_ri(num_threads: usize)
+                    -> (Vec<Vec<mpsc::Sender<bool>>>,
+                        Vec<Vec<mpsc::Receiver<bool>>>)
+{
     let ntsq = num_threads * num_threads;
     
     // Model the channels as several NxN matrices.
@@ -73,57 +108,16 @@ fn make_channels_ri(num_threads: usize) -> Vec<Data> {
         }
     }
 
-    // Remove all Nones and remove each channel pair from its
-    // Option container.
-    filter!(rqst_tx, rqst_rx);
-
-    let (mut rqst_tx, mut rqst_rx) = (rqst_tx, rqst_rx);
-    let (mut resp_tx, mut resp_rx,
-         mut jobs_tx, mut jobs_rx) = make_channels_shared(num_threads);
-    
-    // Create channel data.
-    let mut channels = Vec::<Data>::with_capacity(num_threads);
-
-    #[allow(unused_variables)]
-    for n in 0..num_threads {
-        let rqst_tx_tmp = rqst_tx.split_off(num_threads);
-        let send_requests = rqst_tx;
-        rqst_tx = rqst_tx_tmp;
-
-        let rqst_rx_tmp = rqst_rx.split_off(num_threads);
-        let get_requests = rqst_rx;
-        rqst_rx = rqst_rx_tmp;
-
-        let resp_tx_tmp = resp_tx.split_off(num_threads);
-        let send_responses = resp_tx;
-        resp_tx = resp_tx_tmp;
-
-        let resp_rx_tmp = resp_rx.split_off(num_threads);
-        let get_responses = resp_rx;
-        resp_rx = resp_rx_tmp;
-
-        let jobs_tx_tmp = jobs_tx.split_off(num_threads);
-        let send_tasks = jobs_tx;
-        jobs_tx = jobs_tx_tmp;
-
-        let jobs_rx_tmp = jobs_rx.split_off(num_threads);
-        let get_tasks = jobs_rx;
-        jobs_rx = jobs_rx_tmp;
-
-        channels.push(Data::Receiver {
-            send_requests: send_requests,
-            get_requests: get_requests,
-            send_responses: send_responses,
-            get_responses: get_responses,
-            send_tasks: send_tasks,
-            get_tasks: get_tasks,
-        });
-    }
-
-    channels
+    (
+        split_vec(filter_vec(rqst_tx), num_threads, num_threads-1),
+        split_vec(filter_vec(rqst_rx), num_threads, num_threads-1),
+    )
 }
 
-fn make_channels_si(num_threads: usize) -> Vec<Data> {
+fn make_channels_si(num_threads: usize)
+                    -> (Vec<spmc::Sender<bool>>,
+                        Vec<Vec<spmc::Receiver<bool>>>)
+{
     let mut rqst_tx = Vec::<spmc::Sender<bool>>::with_capacity(num_threads);
     let mut rqst_rx = Vec::<spmc::Receiver<bool>>::with_capacity(num_threads);
 
@@ -171,52 +165,14 @@ fn make_channels_si(num_threads: usize) -> Vec<Data> {
         rqst_rx.push(recvs);
     }
 
-    let (mut resp_tx, mut resp_rx,
-         mut jobs_tx, mut jobs_rx) = make_channels_shared(num_threads);
-    
-    // Create channel data.
-    let mut channels = Vec::<Data>::with_capacity(num_threads);
-
-    #[allow(unused_variables)]
-    for n in 0..num_threads {
-        let send_requests = rqst_tx.remove(0);
-
-        let get_requests = rqst_rx.remove(0);
-
-        let resp_tx_tmp = resp_tx.split_off(num_threads);
-        let send_responses = resp_tx;
-        resp_tx = resp_tx_tmp;
-
-        let resp_rx_tmp = resp_rx.split_off(num_threads);
-        let get_responses = resp_rx;
-        resp_rx = resp_rx_tmp;
-
-        let jobs_tx_tmp = jobs_tx.split_off(num_threads);
-        let send_tasks = jobs_tx;
-        jobs_tx = jobs_tx_tmp;
-
-        let jobs_rx_tmp = jobs_rx.split_off(num_threads);
-        let get_tasks = jobs_rx;
-        jobs_rx = jobs_rx_tmp;
-
-        channels.push(Data::Sender {
-            send_requests: send_requests,
-            get_requests: get_requests,
-            send_responses: send_responses,
-            get_responses: get_responses,
-            send_tasks: send_tasks,
-            get_tasks: get_tasks,
-        });
-    }
-
-    channels
+    (rqst_tx, rqst_rx)
 }
 
 fn make_channels_shared(num_threads: usize)
-                        -> (Vec<mpsc::Sender<usize>>,
-                            Vec<mpsc::Receiver<usize>>,
-                            Vec<mpsc::Sender<Task>>,
-                            Vec<mpsc::Receiver<Task>>)
+                        -> (Vec<Vec<mpsc::Sender<usize>>>,
+                            Vec<Vec<mpsc::Receiver<usize>>>,
+                            Vec<Vec<mpsc::Sender<Task>>>,
+                            Vec<Vec<mpsc::Receiver<Task>>>)
 {
     let ntsq = num_threads * num_threads;
     
@@ -254,12 +210,31 @@ fn make_channels_shared(num_threads: usize)
         }
     }
 
-    // Remove all Nones and remove each channel pair from its
-    // Option container.
-    filter!(resp_tx, resp_rx,
-            jobs_tx, jobs_rx);
+    // Remove all Nones, remove each channel pair from its
+    // Option container, and split the Vec into num_threads pieces.
+    (
+        split_vec(filter_vec(resp_tx), num_threads, num_threads-1),
+        split_vec(filter_vec(resp_rx), num_threads, num_threads-1),
+        split_vec(filter_vec(jobs_tx), num_threads, num_threads-1),
+        split_vec(filter_vec(jobs_rx), num_threads, num_threads-1),
+    )
+}
 
-    (resp_tx, resp_rx, jobs_tx, jobs_rx)
+fn filter_vec<T>(v: Vec<Option<T>>) -> Vec<T> {
+    v.into_iter().filter_map(|n| { n }).collect::<Vec<_>>()
+}
+
+fn split_vec<T>(mut v: Vec<T>, n: usize, r: usize) -> Vec<Vec<T>> {
+    assert!(n*r == v.len());
+
+    let mut res = Vec::<Vec<T>>::with_capacity(n);
+
+    #[allow(unused_variables)]
+    for nn in 0..n {
+        res.push(v.drain(0..r).collect());
+    }
+
+    res
 }
 
 fn get_yx(n: usize, row_size: usize) -> (usize, usize) {
@@ -281,3 +256,61 @@ fn transpose_n(n: usize, row_size: usize) -> usize {
     x * row_size + y 
 }
 
+#[cfg(test)]
+mod tests {
+    use super::super::Initiated;
+    use super::{Data, make_channels, make_channels_ri, make_channels_si, make_channels_shared, split_vec};
+
+    static NT: usize = 4;
+
+    #[test]
+    fn test_split_vec() {
+        let vec = vec![0, 1, 2,
+                           3, 4, 5,
+                           6, 7, 8,
+                           9, 10, 11];
+        let (n, r) = (4, 3);
+        let vec2 = split_vec(vec, 4, 3);
+        assert!(vec2.len() == n);
+        for vec3 in vec2 {
+            assert!(vec3.len() == r);
+        }
+    }
+
+    #[test]
+    fn test_make_channels_shared() {
+        let (resp_tx, resp_rx, jobs_tx, jobs_rx) = make_channels_shared(NT);
+        assert!(resp_tx.len() == NT);
+        assert!(resp_rx.len() == NT);
+        assert!(jobs_tx.len() == NT);
+        assert!(jobs_rx.len() == NT);
+    }
+
+    #[test]
+    fn test_make_channels_ri() {
+        #[allow(unused_variables)]
+        let data = make_channels_ri(NT);
+        assert!(true);
+    }
+
+    #[test]
+    fn test_make_channels_si() {
+        #[allow(unused_variables)]
+        let data = make_channels_si(NT);
+        assert!(true);
+    }
+
+    #[test]
+    fn test_make_ri() {
+        #[allow(unused_variables)]
+        let data = make_channels(NT, Initiated::RECEIVER);
+        assert!(true);
+    }
+
+    #[test]
+    fn test_make_si() {
+        #[allow(unused_variables)]
+        let data = make_channels(NT, Initiated::SENDER);
+        assert!(true);
+    }
+}
