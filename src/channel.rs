@@ -483,7 +483,7 @@ mod tests {
                 send_responses[0].send(1).unwrap();
                 send_tasks[0].send(Box::new(|| {
                     println!("Hello!");
-                }));
+                })).unwrap();
             },
             Data::Receiver { .. } => { assert!(false); },
         };
@@ -518,7 +518,7 @@ mod tests {
                 send_responses[0].send(1).unwrap();
                 send_tasks[0].send(Box::new(|| {
                     println!("World!");
-                }));
+                })).unwrap();
             },
             Data::Receiver { .. } => { assert!(false); },
         };
@@ -535,4 +535,187 @@ mod tests {
             Data::Receiver { .. } => { assert!(false); },
         };
     }
+
+    macro_rules! tstcomm_ri {
+        ($data1:ident, $send:ident, $idx1:expr, $var:expr,
+         $data2:ident, $recv:ident, $idx2:expr) => (
+            match $data1 {
+                Data::Receiver {
+                    ref $send, ..
+                } => {
+                    $send[$idx1].send($var).unwrap();
+                },
+                Data::Sender { .. } => { assert!(false); }
+            };
+            match $data2 {
+                Data::Receiver {
+                    ref $recv, ..
+                } => {
+                    let d = $recv[$idx2].recv().unwrap();
+                    assert!(d == $var);
+                },
+                Data::Sender { .. } => { assert!(false); }
+            };
+        );
+    }
+
+    macro_rules! tstcomm_tasks_ri {
+        ($data1:ident, $send:ident, $idx1:expr, $var:expr,
+         $data2:ident, $recv:ident, $idx2:expr) => (
+            match $data1 {
+                Data::Receiver {
+                    ref $send, ..
+                } => {
+                    $send[$idx1].send($var).unwrap();
+                },
+                Data::Sender { .. } => { assert!(false); }
+            };
+            match $data2 {
+                Data::Receiver {
+                    ref $recv, ..
+                } => {
+                    let d = $recv[$idx2].recv().unwrap();
+                    d.call_box();
+                },
+                Data::Sender { .. } => { assert!(false); }
+            };
+        );
+    }
+
+
+    #[test]
+    fn test_requests_ri() {
+        let mut data = make_channels(3, Initiated::RECEIVER);
+        let chan3 = data.pop().unwrap();
+        let chan2 = data.pop().unwrap();
+        let chan1 = data.pop().unwrap();
+
+        tstcomm_ri!(chan1, send_requests, 0, true, chan2, get_requests, 0);
+        tstcomm_ri!(chan1, send_requests, 1, true, chan3, get_requests, 0);
+        tstcomm_ri!(chan2, send_requests, 0, true, chan1, get_requests, 0);
+        tstcomm_ri!(chan2, send_requests, 1, true, chan3, get_requests, 1);
+        tstcomm_ri!(chan3, send_requests, 0, true, chan1, get_requests, 1);
+        tstcomm_ri!(chan3, send_requests, 1, true, chan2, get_requests, 1);
+    }
+
+    #[test]
+    fn test_responses_ri() {
+        let mut data = make_channels(3, Initiated::RECEIVER);
+        let chan3 = data.pop().unwrap();
+        let chan2 = data.pop().unwrap();
+        let chan1 = data.pop().unwrap();
+
+        tstcomm_ri!(chan1, send_responses, 0, 1, chan2, get_responses, 0);
+        tstcomm_ri!(chan1, send_responses, 1, 2, chan3, get_responses, 0);
+        tstcomm_ri!(chan2, send_responses, 0, 3, chan1, get_responses, 0);
+        tstcomm_ri!(chan2, send_responses, 1, 4, chan3, get_responses, 1);
+        tstcomm_ri!(chan3, send_responses, 0, 5, chan1, get_responses, 1);
+        tstcomm_ri!(chan3, send_responses, 1, 6, chan2, get_responses, 1);
+    }
+
+    #[test]
+    fn test_tasks_ri() {
+        let mut data = make_channels(3, Initiated::RECEIVER);
+        let chan3 = data.pop().unwrap();
+        let chan2 = data.pop().unwrap();
+        let chan1 = data.pop().unwrap();
+
+        tstcomm_tasks_ri!(chan1, send_tasks, 0, Box::new(|| {println!("Hello 1")}), chan2, get_tasks, 0);
+        tstcomm_tasks_ri!(chan1, send_tasks, 1, Box::new(|| {println!("Hello 2")}), chan3, get_tasks, 0);
+        tstcomm_tasks_ri!(chan2, send_tasks, 0, Box::new(|| {println!("Hello 3")}), chan1, get_tasks, 0);
+        tstcomm_tasks_ri!(chan2, send_tasks, 1, Box::new(|| {println!("Hello 4")}), chan3, get_tasks, 1);
+        tstcomm_tasks_ri!(chan3, send_tasks, 0, Box::new(|| {println!("Hello 5")}), chan1, get_tasks, 1);
+        tstcomm_tasks_ri!(chan3, send_tasks, 1, Box::new(|| {println!("Hello 6")}), chan2, get_tasks, 1);
+    }
+
+    macro_rules! tstcomm_si {
+        ($data1:ident, $send:ident, $var:expr,
+         $data2:ident, $recv:ident, $idx2:expr) => (
+            match $data1 {
+                Data::Sender {
+                    ref $send, ..
+                } => {
+                    $send.send($var).unwrap();
+                },
+                Data::Receiver { .. } => { assert!(false); }
+            };
+            match $data2 {
+                Data::Sender {
+                    ref $recv, ..
+                } => {
+                    let d = $recv[$idx2].recv().unwrap();
+                    assert!(d == $var);
+                },
+                Data::Receiver { .. } => { assert!(false); }
+            };
+        );
+    }
+
+    macro_rules! tstcomm_tasks_si {
+        ($data1:ident, $send:ident, $var:expr,
+         $data2:ident, $recv:ident, $idx2:expr) => (
+            match $data1 {
+                Data::Sender {
+                    ref $send, ..
+                } => {
+                    $send.send($var).unwrap();
+                },
+                Data::Receiver { .. } => { assert!(false); }
+            };
+            match $data2 {
+                Data::Sender {
+                    ref $recv, ..
+                } => {
+                    let d = $recv[$idx2].recv().unwrap();
+                    d.call_box();
+                },
+                Data::Receiver { .. } => { assert!(false); }
+            };
+        );
+    }
+
+    // #[test]
+    // fn test_requests_si() {
+    //     let mut data = make_channels(3, Initiated::SENDER);
+    //     let chan3 = data.pop().unwrap();
+    //     let chan2 = data.pop().unwrap();
+    //     let chan1 = data.pop().unwrap();
+
+    //     tstcomm_ri!(chan1, send_requests, 0, true, chan2, get_requests, 0);
+    //     tstcomm_ri!(chan1, send_requests, 1, true, chan3, get_requests, 0);
+    //     tstcomm_ri!(chan2, send_requests, 0, true, chan1, get_requests, 0);
+    //     tstcomm_ri!(chan2, send_requests, 1, true, chan3, get_requests, 1);
+    //     tstcomm_ri!(chan3, send_requests, 0, true, chan1, get_requests, 1);
+    //     tstcomm_ri!(chan3, send_requests, 1, true, chan2, get_requests, 1);
+    // }
+
+    // #[test]
+    // fn test_responses_si() {
+    //     let mut data = make_channels(3, Initiated::SENDER);
+    //     let chan3 = data.pop().unwrap();
+    //     let chan2 = data.pop().unwrap();
+    //     let chan1 = data.pop().unwrap();
+
+    //     tstcomm_ri!(chan1, send_responses, 0, 1, chan2, get_responses, 0);
+    //     tstcomm_ri!(chan1, send_responses, 1, 2, chan3, get_responses, 0);
+    //     tstcomm_ri!(chan2, send_responses, 0, 3, chan1, get_responses, 0);
+    //     tstcomm_ri!(chan2, send_responses, 1, 4, chan3, get_responses, 1);
+    //     tstcomm_ri!(chan3, send_responses, 0, 5, chan1, get_responses, 1);
+    //     tstcomm_ri!(chan3, send_responses, 1, 6, chan2, get_responses, 1);
+    // }
+
+    // #[test]
+    // fn test_tasks_si() {
+    //     let mut data = make_channels(3, Initiated::SENDER);
+    //     let chan3 = data.pop().unwrap();
+    //     let chan2 = data.pop().unwrap();
+    //     let chan1 = data.pop().unwrap();
+
+    //     tstcomm_tasks_ri!(chan1, send_tasks, 0, Box::new(|| {println!("Hello 1")}), chan2, get_tasks, 0);
+    //     tstcomm_tasks_ri!(chan1, send_tasks, 1, Box::new(|| {println!("Hello 2")}), chan3, get_tasks, 0);
+    //     tstcomm_tasks_ri!(chan2, send_tasks, 0, Box::new(|| {println!("Hello 3")}), chan1, get_tasks, 0);
+    //     tstcomm_tasks_ri!(chan2, send_tasks, 1, Box::new(|| {println!("Hello 4")}), chan3, get_tasks, 1);
+    //     tstcomm_tasks_ri!(chan3, send_tasks, 0, Box::new(|| {println!("Hello 5")}), chan1, get_tasks, 1);
+    //     tstcomm_tasks_ri!(chan3, send_tasks, 1, Box::new(|| {println!("Hello 6")}), chan2, get_tasks, 1);
+    // }
 }

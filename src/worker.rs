@@ -245,3 +245,35 @@ impl Worker {
         (self.rng.borrow_mut().next_u32() as usize) % self.channel_length
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Worker, Config};
+    use super::super::{Task, Initiated, ShareStrategy};
+    use super::super::channel::{Data, make_channels};
+
+    #[test]
+    fn test_make_worker_ri() {
+        let mut channels = make_channels(2, Initiated::RECEIVER);
+        #[allow(unused_variables)]
+        let worker = Worker::new(Config {
+            index: 0,
+            task_capacity: 16,
+            share_strategy: ShareStrategy::ONE,
+            channel_data: channels.remove(0),
+        });
+    }
+
+    #[test]
+    fn test_make_worker_si() {
+        let mut channels = make_channels(2, Initiated::SENDER);
+        #[allow(unused_variables)]
+        let worker = Worker::new(Config {
+            index: 0,
+            task_capacity: 16,
+            share_strategy: ShareStrategy::ONE,
+            channel_data: channels.remove(0),
+        });
+    }
+
+}
