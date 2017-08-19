@@ -249,8 +249,29 @@ impl Worker {
 #[cfg(test)]
 mod tests {
     use super::{Worker, Config};
-    use super::super::{Task, Initiated, ShareStrategy};
-    use super::super::channel::{Data, make_channels};
+    use super::super::{Initiated, ShareStrategy};
+    use super::super::channel::make_channels;
+
+    fn helper(initiated: Initiated,
+              share: ShareStrategy) -> (Worker, Worker) {
+        let mut channels = make_channels(2, Initiated::RECEIVER);
+        
+        let worker1 = Worker::new(Config {
+            index: 0,
+            task_capacity: 16,
+            share_strategy: ShareStrategy::ONE,
+            channel_data: channels.remove(0),
+        });
+        
+        let worker2 = Worker::new(Config {
+            index: 0,
+            task_capacity: 16,
+            share_strategy: ShareStrategy::ONE,
+            channel_data: channels.remove(0),
+        });
+
+        (worker1, worker2)
+    }
 
     #[test]
     fn test_make_worker_ri() {
@@ -276,4 +297,12 @@ mod tests {
         });
     }
 
+    #[test]
+    fn test_worker_addtask() {
+        let (worker, _) = helper(Initiated::RECEIVER, ShareStrategy::ONE);
+
+        worker.add_task(Box::new(|| { println!("Hello World!");}));
+
+        assert!(worker.tasks.borrow_mut().len() == 1);
+    }
 }
