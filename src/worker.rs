@@ -33,20 +33,7 @@ impl Worker {
                      channel_data: channels
         } = config;
 
-        let len = match channels {
-            channel::Data::Receiver {
-                ref get_requests,
-                ..
-            } => {
-                get_requests.len()
-            },
-            channel::Data::Sender {
-                ref get_requests,
-                ..
-            } => {
-                get_requests.len()
-            },
-        };
+        let len = channels.responses_send.len(); 
 
         Worker {
             index: index,
@@ -92,40 +79,35 @@ impl Worker {
         let mut got_tasks = false;
         
         #[allow(unused_variables)]
-        match self.channels {
-            channel::Data::Receiver {
-                ref send_requests,
-                ref get_responses,
-                ref get_tasks,
-                ..
+        match self.channels.requests {
+            channel::Requests::Receiver {
+                ref send, ..
             } => {
                 while !got_tasks {
                     let ridx = self.rand_index();
                     
-                    send_requests[ridx].send(true).unwrap();
+                    send[ridx].send(true).unwrap();
 
-                    let num_tasks = get_responses[ridx].recv().unwrap();
+                    let num_tasks = self.channels.responses_get[ridx].recv().unwrap();
 
                     for n in 0..num_tasks {
-                        self.tasks.borrow_mut().push_back(get_tasks[ridx]
+                        self.tasks.borrow_mut().push_back(self.channels
+                                                          .tasks_get[ridx]
                                                           .recv().unwrap());
                         got_tasks = true;
                     }
                 }
             },
-            channel::Data::Sender {
-                ref send_requests,
-                ref get_responses,
-                ref get_tasks,
-                ..
+            channel::Requests::Sender {
+                ref send, ..
             } => {
-                send_requests.send(true).unwrap();
+                send.send(true).unwrap();
 
                 // Loop waiting for other workers to send tasks
                 let mut ridx = 0;
 
                 while !got_tasks {
-                    let num_tasks = match get_responses[ridx].try_recv() {
+                    let num_tasks = match self.channels.responses_get[ridx].try_recv() {
                         Ok(nt) => nt,
                         Err(mpsc::TryRecvError::Empty) => {
                             ridx = (ridx + 1) % self.channel_length;
@@ -138,7 +120,8 @@ impl Worker {
                     };
 
                     for n in 0..num_tasks {
-                        self.tasks.borrow_mut().push_back(get_tasks[ridx]
+                        self.tasks.borrow_mut().push_back(self.channels
+                                                          .tasks_get[ridx]
                                                           .recv().unwrap());
                         got_tasks = true;
                     }
@@ -148,10 +131,9 @@ impl Worker {
     }
 
     fn process_requests(&self) {
-        match self.channels {
-            channel::Data::Receiver {
-                ref get_requests,
-                ..
+        match self.channels.requests {
+            channel::Requests::Receiver {
+                ref get, ..
             } => {
                 for index in 0..self.channel_length {
                     // Do not trying sharing tasks if we do not have any.
@@ -159,15 +141,15 @@ impl Worker {
                         break;
                     }
 
-                    let idx = index % self.channel_length;
+                    // let idx = index % self.channel_length;
                     
-                    if let Ok(_) = get_requests[idx].try_recv() {
-                        self.share(idx);
+                    if let Ok(_) = get[index].try_recv() {
+                        self.share(index);
                     }
                 }
             },
-            channel::Data::Sender {
-                ref get_requests,
+            channel::Requests::Sender {
+                ref get,
                 ..
             } => {
                 for index in 0..self.channel_length {
@@ -176,10 +158,10 @@ impl Worker {
                         break;
                     }
 
-                    let idx = index % self.channel_length;
+                    // let idx = index % self.channel_length;
 
-                    if let Ok(_) = get_requests[idx].try_recv() {
-                        self.share(idx);
+                    if let Ok(_) = get[index].try_recv() {
+                        self.share(index);
                     }
                 }
             },
@@ -189,53 +171,18 @@ impl Worker {
     fn share(&self, idx: usize) {
         match self.share_strategy {
             ShareStrategy::ONE => {
-                match self.channels {
-                    channel::Data::Receiver {
-                        ref send_responses,
-                        ref send_tasks,
-                        ..
-                    } => {
-                        send_responses[idx].send(1).unwrap();
-                        send_tasks[idx].send(self.tasks.borrow_mut()
-                                             .pop_front().unwrap()).unwrap();
-                    },
-                    channel::Data::Sender {
-                        ref send_responses,
-                        ref send_tasks,
-                        ..
-                    } => {
-                        send_responses[idx].send(1).unwrap();
-                        send_tasks[idx].send(self.tasks.borrow_mut()
-                                             .pop_front().unwrap()).unwrap();
-                    },
-                }
+
+                self.channels.responses_send[idx].send(1).unwrap();
+                self.channels.tasks_send[idx].send(self.tasks.borrow_mut()
+                                                   .pop_front().unwrap()).unwrap();
             },
             ShareStrategy::HALF => {
                 let half_len = self.tasks.borrow().len() / 2;
 
-                match self.channels {
-                    channel::Data::Receiver {
-                        ref send_responses,
-                        ref send_tasks,
-                        ..
-                    } => {
-                        send_responses[idx].send(half_len).unwrap();
+                self.channels.responses_send[idx].send(half_len).unwrap();
 
-                        for task in self.tasks.borrow_mut().split_off(half_len) {
-                            send_tasks[idx].send(task).unwrap();
-                        }
-                    },
-                    channel::Data::Sender {
-                        ref send_responses,
-                        ref send_tasks,
-                        ..
-                    } => {
-                        send_responses[idx].send(half_len).unwrap();
-
-                        for task in self.tasks.borrow_mut().split_off(half_len) {
-                            send_tasks[idx].send(task).unwrap();
-                        }
-                    },
+                for task in self.tasks.borrow_mut().split_off(half_len) {
+                    self.channels.tasks_send[idx].send(task).unwrap();
                 }
             },
         }
@@ -254,19 +201,19 @@ mod tests {
 
     fn helper(initiated: Initiated,
               share: ShareStrategy) -> (Worker, Worker) {
-        let mut channels = make_channels(2, Initiated::RECEIVER);
+        let mut channels = make_channels(2, initiated);
         
         let worker1 = Worker::new(Config {
             index: 0,
             task_capacity: 16,
-            share_strategy: ShareStrategy::ONE,
+            share_strategy: share,
             channel_data: channels.remove(0),
         });
         
         let worker2 = Worker::new(Config {
             index: 0,
             task_capacity: 16,
-            share_strategy: ShareStrategy::ONE,
+            share_strategy: share,
             channel_data: channels.remove(0),
         });
 

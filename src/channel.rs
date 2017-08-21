@@ -6,26 +6,26 @@ use spmc;
 use super::Initiated;
 use task::Task;
 
-pub enum Data
-{
+pub enum Requests {
     Receiver
     {
-        send_requests: Vec<mpsc::Sender<bool>>,
-        get_requests: Vec<mpsc::Receiver<bool>>,
-        send_responses: Vec<mpsc::Sender<usize>>,
-        get_responses: Vec<mpsc::Receiver<usize>>,
-        send_tasks: Vec<mpsc::Sender<Task>>,
-        get_tasks: Vec<mpsc::Receiver<Task>>,
+        send: Vec<mpsc::Sender<bool>>,
+        get: Vec<mpsc::Receiver<bool>>,
     },
     Sender
     {
-        send_requests: spmc::Sender<bool>,
-        get_requests: Vec<spmc::Receiver<bool>>,
-        send_responses: Vec<mpsc::Sender<usize>>,
-        get_responses: Vec<mpsc::Receiver<usize>>,
-        send_tasks: Vec<mpsc::Sender<Task>>,
-        get_tasks: Vec<mpsc::Receiver<Task>>,
+        send: spmc::Sender<bool>,
+        get: Vec<spmc::Receiver<bool>>,
     },
+}
+
+pub struct Data
+{
+    pub requests: Requests,
+    pub responses_send: Vec<mpsc::Sender<usize>>,
+    pub responses_get: Vec<mpsc::Receiver<usize>>,
+    pub tasks_send: Vec<mpsc::Sender<Task>>,
+    pub tasks_get: Vec<mpsc::Receiver<Task>>,
 }
 
 pub fn make_channels(num_threads: usize,
@@ -41,16 +41,18 @@ pub fn make_channels(num_threads: usize,
             itertools::multizip((rqst_tx, rqst_rx,
                                  resp_tx, resp_rx,
                                  jobs_tx, jobs_rx))
-                .map(|(send_requests, get_requests,
-                       send_responses, get_responses,
-                       send_tasks, get_tasks)| {
-                    Data::Receiver {
-                        send_requests: send_requests,
-                        get_requests: get_requests,
-                        send_responses: send_responses,
-                        get_responses: get_responses,
-                        send_tasks: send_tasks,
-                        get_tasks: get_tasks,
+                .map(|(requests_send, requests_get,
+                       responses_send, responses_get,
+                       tasks_send, tasks_get)| {
+                    Data {
+                        requests: Requests::Receiver {
+                            send: requests_send,
+                            get: requests_get,
+                        },
+                        responses_send: responses_send,
+                        responses_get: responses_get,
+                        tasks_send: tasks_send,
+                        tasks_get: tasks_get,
                     }
                 }).collect::<Vec<Data>>()
         },
@@ -60,16 +62,18 @@ pub fn make_channels(num_threads: usize,
             itertools::multizip((rqst_tx, rqst_rx,
                                  resp_tx, resp_rx,
                                  jobs_tx, jobs_rx))
-                .map(|(send_requests, get_requests,
-                       send_responses, get_responses,
-                       send_tasks, get_tasks)| {
-                    Data::Sender {
-                        send_requests: send_requests,
-                        get_requests: get_requests,
-                        send_responses: send_responses,
-                        get_responses: get_responses,
-                        send_tasks: send_tasks,
-                        get_tasks: get_tasks,
+                .map(|(requests_send, requests_get,
+                       responses_send, responses_get,
+                       tasks_send, tasks_get)| {
+                    Data {
+                        requests: Requests::Sender {
+                            send: requests_send,
+                            get: requests_get,
+                        },
+                        responses_send: responses_send,
+                        responses_get: responses_get,
+                        tasks_send: tasks_send,
+                        tasks_get: tasks_get,
                     }
                 }).collect::<Vec<Data>>()
         },
@@ -259,7 +263,7 @@ fn transpose_n(n: usize, row_size: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::super::Initiated;
-    use super::{Data, make_channels, make_channels_ri, make_channels_si, make_channels_shared, split_vec};
+    use super::{Data, Requests, make_channels, make_channels_ri, make_channels_si, make_channels_shared, split_vec};
 
     static NT: usize = 4;
 
@@ -338,20 +342,19 @@ mod tests {
         assert!(data.len() == NT);
 
         for datum in data.into_iter() {
-            match datum {
-                Data::Receiver {
-                    send_requests, get_requests,
-                    send_responses, get_responses,
-                    send_tasks, get_tasks,
+            assert!(datum.responses_send.len() == NT-1);
+            assert!(datum.responses_get.len() == NT-1);
+            assert!(datum.tasks_send.len() == NT-1);
+            assert!(datum.tasks_get.len() == NT-1);
+
+            match datum.requests {
+                Requests::Receiver {
+                    send, get,
                 } => {
-                    assert!(send_requests.len() == NT-1);
-                    assert!(get_requests.len() == NT-1);
-                    assert!(send_responses.len() == NT-1);
-                    assert!(get_responses.len() == NT-1);
-                    assert!(send_tasks.len() == NT-1);
-                    assert!(get_tasks.len() == NT-1);
+                    assert!(send.len() == NT-1);
+                    assert!(get.len() == NT-1);
                 },
-                Data::Sender { .. } => {
+                Requests::Sender { .. } => {
                     assert!(false);
                 }
             }
@@ -365,63 +368,65 @@ mod tests {
         assert!(data.len() == NT);
 
         for datum in data.into_iter() {
-            match datum {
-                Data::Sender {
-                    get_requests,
-                    send_responses, get_responses,
-                    send_tasks, get_tasks, ..
+            assert!(datum.responses_send.len() == NT-1);
+            assert!(datum.responses_get.len() == NT-1);
+            assert!(datum.tasks_send.len() == NT-1);
+            assert!(datum.tasks_get.len() == NT-1);
+
+            match datum.requests {
+                Requests::Sender{
+                    get, ..
                 } => {
-                    assert!(get_requests.len() == NT-1);
-                    assert!(send_responses.len() == NT-1);
-                    assert!(get_responses.len() == NT-1);
-                    assert!(send_tasks.len() == NT-1);
-                    assert!(get_tasks.len() == NT-1);
+                    assert!(get.len() == NT-1);
                 },
-                Data::Receiver { .. } => { assert!(false); },
+                Requests::Receiver{ .. } => {
+                    assert!(false);
+                }
             }
         }
     }
 
-    macro_rules! tstcomm {
-        ($type:ident, $data1:ident, $send:ident, $idx1:expr,
-         $var:expr, $data2:ident, $recv:ident, $idx2:expr) => (
-            match $data1 {
-                $type {
-                    ref $send, ..
-                } => {
-                    $send[$idx1].send($var).unwrap();
-                },
-                _ => { assert!(false); }
-            };
-            match $data2 {
-                $type {
-                    ref $recv, ..
-                } => {
-                    let d = $recv[$idx2].recv().unwrap();
-                    assert!(d == $var);
-                },
-                _ => { assert!(false); }
-            };
-        );
-    }
+    // macro_rules! tstcomm {
+    //     ($type:ident, $data1:ident, $send:ident, $idx1:expr,
+    //      $var:expr, $data2:ident, $recv:ident, $idx2:expr) => (
+    //         match $data1 {
+    //             $type {
+    //                 ref $send, ..
+    //             } => {
+    //                 $send[$idx1].send($var).unwrap();
+    //             },
+    //             _ => { assert!(false); }
+    //         };
+    //         match $data2 {
+    //             $type {
+    //                 ref $recv, ..
+    //             } => {
+    //                 let d = $recv[$idx2].recv().unwrap();
+    //                 assert!(d == $var);
+    //             },
+    //             _ => { assert!(false); }
+    //         };
+    //     );
+    // }
 
-    macro_rules! tstcomm_tasks {
-        ($type:ident, $data1:ident, $send:ident, $idx1:expr,
-         $var:expr, $data2:ident, $recv:ident, $idx2:expr) => (
-            match $data1 {
-                $type {
-                    ref $send, ..
+    macro_rules! tstcomm_reqs_ri {
+        ($chan1:ident, $idx1:expr, $var:expr,
+         $chan2:ident, $idx2:expr) => (
+            match $chan1.requests {
+                Requests::Receiver {
+                    ref send, ..
                 } => {
-                    $send[$idx1].send($var).unwrap();
+                    send[$idx1].send($var).unwrap();
                 },
                 _ => { assert!(false); }
             };
-            match $data2 {
-                $type {
-                    ref $recv, ..
+            
+            match $chan2.requests {
+                Requests::Receiver {
+                    ref get, ..
                 } => {
-                    let d = $recv[$idx2].recv().unwrap();
-                    d.call_box();
+                    let d = get[$idx2].recv().unwrap();
+                    assert!(d == $var);
                 },
                 _ => { assert!(false); }
             };
@@ -429,25 +434,44 @@ mod tests {
     }
 
     macro_rules! tstcomm_reqs_si {
-        ($data1:ident, $send:ident, $var:expr,
-         $data2:ident, $recv:ident, $idx2:expr) => (
-            match $data1 {
-                Data::Sender {
-                    ref $send, ..
+        ($chan1:ident, $var:expr,
+         $chan2:ident, $idx2:expr) => (
+            match $chan1.requests {
+                Requests::Sender {
+                    ref send, ..
                 } => {
-                    $send.send($var).unwrap();
+                    send.send($var).unwrap();
                 },
                 _ => { assert!(false); }
             };
-            match $data2 {
-                Data::Sender {
-                    ref $recv, ..
+            
+            match $chan2.requests {
+                Requests::Sender {
+                    ref get, ..
                 } => {
-                    let d = $recv[$idx2].recv().unwrap();
+                    let d = get[$idx2].recv().unwrap();
                     assert!(d == $var);
                 },
                 _ => { assert!(false); }
             };
+        );
+    }
+
+    macro_rules! tstcomm_resp {
+        ($chan1:ident, $idx1:expr, $var:expr,
+         $chan2:ident, $idx2:expr) => (
+            $chan1.responses_send[$idx1].send($var).unwrap();
+            let d = $chan2.responses_get[$idx2].recv().unwrap();
+            assert!(d == $var);
+        );
+    }
+
+    macro_rules! tstcomm_tasks {
+        ($chan1:ident, $idx1:expr, $var:expr,
+         $chan2:ident, $idx2:expr) => (
+            $chan1.tasks_send[$idx1].send($var).unwrap();
+            let d = $chan2.tasks_get[$idx2].recv().unwrap();
+            d.call_box();
         );
     }
 
@@ -457,46 +481,13 @@ mod tests {
         let chan3 = data.pop().unwrap();
         let chan2 = data.pop().unwrap();
         let chan1 = data.pop().unwrap();
-        use self::Data::Receiver;
 
-        tstcomm!(Receiver, chan1, send_requests, 0, true, chan2, get_requests, 0);
-        tstcomm!(Receiver, chan1, send_requests, 1, true, chan3, get_requests, 0);
-        tstcomm!(Receiver, chan2, send_requests, 0, true, chan1, get_requests, 0);
-        tstcomm!(Receiver, chan2, send_requests, 1, true, chan3, get_requests, 1);
-        tstcomm!(Receiver, chan3, send_requests, 0, true, chan1, get_requests, 1);
-        tstcomm!(Receiver, chan3, send_requests, 1, true, chan2, get_requests, 1);
-    }
-
-    #[test]
-    fn test_responses_ri() {
-        let mut data = make_channels(3, Initiated::RECEIVER);
-        let chan3 = data.pop().unwrap();
-        let chan2 = data.pop().unwrap();
-        let chan1 = data.pop().unwrap();
-        use self::Data::Receiver;
-
-        tstcomm!(Receiver, chan1, send_responses, 0, 1, chan2, get_responses, 0);
-        tstcomm!(Receiver, chan1, send_responses, 1, 2, chan3, get_responses, 0);
-        tstcomm!(Receiver, chan2, send_responses, 0, 3, chan1, get_responses, 0);
-        tstcomm!(Receiver, chan2, send_responses, 1, 4, chan3, get_responses, 1);
-        tstcomm!(Receiver, chan3, send_responses, 0, 5, chan1, get_responses, 1);
-        tstcomm!(Receiver, chan3, send_responses, 1, 6, chan2, get_responses, 1);
-    }
-
-    #[test]
-    fn test_tasks_ri() {
-        let mut data = make_channels(3, Initiated::RECEIVER);
-        let chan3 = data.pop().unwrap();
-        let chan2 = data.pop().unwrap();
-        let chan1 = data.pop().unwrap();
-        use self::Data::Receiver;
-
-        tstcomm_tasks!(Receiver, chan1, send_tasks, 0, Box::new(|| {println!("Hello 1")}), chan2, get_tasks, 0);
-        tstcomm_tasks!(Receiver, chan1, send_tasks, 1, Box::new(|| {println!("Hello 2")}), chan3, get_tasks, 0);
-        tstcomm_tasks!(Receiver, chan2, send_tasks, 0, Box::new(|| {println!("Hello 3")}), chan1, get_tasks, 0);
-        tstcomm_tasks!(Receiver, chan2, send_tasks, 1, Box::new(|| {println!("Hello 4")}), chan3, get_tasks, 1);
-        tstcomm_tasks!(Receiver, chan3, send_tasks, 0, Box::new(|| {println!("Hello 5")}), chan1, get_tasks, 1);
-        tstcomm_tasks!(Receiver, chan3, send_tasks, 1, Box::new(|| {println!("Hello 6")}), chan2, get_tasks, 1);
+        tstcomm_reqs_ri!(chan1, 0, true, chan2, 0);
+        tstcomm_reqs_ri!(chan1, 1, true, chan3, 0);
+        tstcomm_reqs_ri!(chan2, 0, true, chan1, 0);
+        tstcomm_reqs_ri!(chan2, 1, true, chan3, 1);
+        tstcomm_reqs_ri!(chan3, 0, true, chan1, 1);
+        tstcomm_reqs_ri!(chan3, 1, true, chan2, 1);
     }
 
     #[test]
@@ -506,45 +497,75 @@ mod tests {
         let chan2 = data.pop().unwrap();
         let chan1 = data.pop().unwrap();
 
-        tstcomm_reqs_si!(chan1, send_requests, true, chan2, get_requests, 0);
-        tstcomm_reqs_si!(chan1, send_requests, true, chan3, get_requests, 0);
-        tstcomm_reqs_si!(chan2, send_requests, true, chan1, get_requests, 0);
-        tstcomm_reqs_si!(chan2, send_requests, true, chan3, get_requests, 1);
-        tstcomm_reqs_si!(chan3, send_requests, true, chan1, get_requests, 1);
-        tstcomm_reqs_si!(chan3, send_requests, true, chan2, get_requests, 1);
+        tstcomm_reqs_si!(chan1, true, chan2, 0);
+        tstcomm_reqs_si!(chan1, true, chan3, 0);
+        tstcomm_reqs_si!(chan2, true, chan1, 0);
+        tstcomm_reqs_si!(chan2, true, chan3, 1);
+        tstcomm_reqs_si!(chan3, true, chan1, 1);
+        tstcomm_reqs_si!(chan3, true, chan2, 1);
     }
 
     #[test]
-    fn test_responses_si() {
-        let mut data = make_channels(3, Initiated::SENDER);
+    fn test_responses() {
+        let mut data = make_channels(3, Initiated::RECEIVER);
         let chan3 = data.pop().unwrap();
         let chan2 = data.pop().unwrap();
         let chan1 = data.pop().unwrap();
-        use self::Data::Sender;
 
-        tstcomm!(Sender, chan1, send_responses, 0, 1, chan2, get_responses, 0);
-        tstcomm!(Sender, chan1, send_responses, 1, 2, chan3, get_responses, 0);
-        tstcomm!(Sender, chan2, send_responses, 0, 3, chan1, get_responses, 0);
-        tstcomm!(Sender, chan2, send_responses, 1, 4, chan3, get_responses, 1);
-        tstcomm!(Sender, chan3, send_responses, 0, 5, chan1, get_responses, 1);
-        tstcomm!(Sender, chan3, send_responses, 1, 6, chan2, get_responses, 1);
+        tstcomm_resp!(chan1, 0, 1, chan2, 0);
+        tstcomm_resp!(chan1, 1, 2, chan3, 0);
+        tstcomm_resp!(chan2, 0, 3, chan1, 0);
+        tstcomm_resp!(chan2, 1, 4, chan3, 1);
+        tstcomm_resp!(chan3, 0, 5, chan1, 1);
+        tstcomm_resp!(chan3, 1, 6, chan2, 1);
     }
 
     #[test]
-    fn test_tasks_si() {
-        let mut data = make_channels(3, Initiated::SENDER);
+    fn test_tasks() {
+        let mut data = make_channels(3, Initiated::RECEIVER);
         let chan3 = data.pop().unwrap();
         let chan2 = data.pop().unwrap();
         let chan1 = data.pop().unwrap();
-        use self::Data::Sender;
 
-        tstcomm_tasks!(Sender, chan1, send_tasks, 0, Box::new(|| {println!("Hello 1")}), chan2, get_tasks, 0);
-        tstcomm_tasks!(Sender, chan1, send_tasks, 1, Box::new(|| {println!("Hello 2")}), chan3, get_tasks, 0);
-        tstcomm_tasks!(Sender, chan2, send_tasks, 0, Box::new(|| {println!("Hello 3")}), chan1, get_tasks, 0);
-        tstcomm_tasks!(Sender, chan2, send_tasks, 1, Box::new(|| {println!("Hello 4")}), chan3, get_tasks, 1);
-        tstcomm_tasks!(Sender, chan3, send_tasks, 0, Box::new(|| {println!("Hello 5")}), chan1, get_tasks, 1);
-        tstcomm_tasks!(Sender, chan3, send_tasks, 1, Box::new(|| {println!("Hello 6")}), chan2, get_tasks, 1);
+        tstcomm_tasks!(chan1, 0, Box::new(|| {println!("Hello 1")}), chan2, 0);
+        tstcomm_tasks!(chan1, 1, Box::new(|| {println!("Hello 2")}), chan3, 0);
+        tstcomm_tasks!(chan2, 0, Box::new(|| {println!("Hello 3")}), chan1, 0);
+        tstcomm_tasks!(chan2, 1, Box::new(|| {println!("Hello 4")}), chan3, 1);
+        tstcomm_tasks!(chan3, 0, Box::new(|| {println!("Hello 5")}), chan1, 1);
+        tstcomm_tasks!(chan3, 1, Box::new(|| {println!("Hello 6")}), chan2, 1);
     }
+
+    // #[test]
+    // fn test_responses_si() {
+    //     let mut data = make_channels(3, Initiated::SENDER);
+    //     let chan3 = data.pop().unwrap();
+    //     let chan2 = data.pop().unwrap();
+    //     let chan1 = data.pop().unwrap();
+    //     use self::Requests::Sender;
+
+    //     tstcomm!(Sender, chan1, responses_send, 0, 1, chan2, responses_get, 0);
+    //     tstcomm!(Sender, chan1, responses_send, 1, 2, chan3, responses_get, 0);
+    //     tstcomm!(Sender, chan2, responses_send, 0, 3, chan1, responses_get, 0);
+    //     tstcomm!(Sender, chan2, responses_send, 1, 4, chan3, responses_get, 1);
+    //     tstcomm!(Sender, chan3, responses_send, 0, 5, chan1, responses_get, 1);
+    //     tstcomm!(Sender, chan3, responses_send, 1, 6, chan2, responses_get, 1);
+    // }
+
+    // #[test]
+    // fn test_tasks_si() {
+    //     let mut data = make_channels(3, Initiated::SENDER);
+    //     let chan3 = data.pop().unwrap();
+    //     let chan2 = data.pop().unwrap();
+    //     let chan1 = data.pop().unwrap();
+    //     use self::Requests::Sender;
+
+    //     tstcomm_tasks!(Sender, chan1, tasks_send, 0, Box::new(|| {println!("Hello 1")}), chan2, tasks_get, 0);
+    //     tstcomm_tasks!(Sender, chan1, tasks_send, 1, Box::new(|| {println!("Hello 2")}), chan3, tasks_get, 0);
+    //     tstcomm_tasks!(Sender, chan2, tasks_send, 0, Box::new(|| {println!("Hello 3")}), chan1, tasks_get, 0);
+    //     tstcomm_tasks!(Sender, chan2, tasks_send, 1, Box::new(|| {println!("Hello 4")}), chan3, tasks_get, 1);
+    //     tstcomm_tasks!(Sender, chan3, tasks_send, 0, Box::new(|| {println!("Hello 5")}), chan1, tasks_get, 1);
+    //     tstcomm_tasks!(Sender, chan3, tasks_send, 1, Box::new(|| {println!("Hello 6")}), chan2, tasks_get, 1);
+    // }
 
     // #[test]
     // fn test_chans_ri() {
@@ -554,21 +575,21 @@ mod tests {
 
     //     match chan1 {
     //         Data::Receiver {
-    //             ref send_requests, ..
+    //             ref requests_send, ..
     //         } => {
-    //             send_requests[0].send(true).unwrap();
+    //             requests_send[0].send(true).unwrap();
     //         },
     //         Data::Sender { .. } => { assert!(false); },
     //     };
 
     //     match chan2 {
     //         Data::Receiver {
-    //             ref get_requests, ref send_responses, ref send_tasks, ..
+    //             ref requests_get, ref responses_send, ref tasks_send, ..
     //         } => {
-    //             let req = get_requests[0].recv().unwrap();
+    //             let req = requests_get[0].recv().unwrap();
     //             assert!(req == true);
-    //             send_responses[0].send(1).unwrap();
-    //             send_tasks[0].send(Box::new(|| {
+    //             responses_send[0].send(1).unwrap();
+    //             tasks_send[0].send(Box::new(|| {
     //                 println!("Hello!");
     //             }));
     //         },
@@ -577,11 +598,11 @@ mod tests {
 
     //     match chan1 {
     //         Data::Receiver {
-    //             ref get_responses, ref get_tasks, ..
+    //             ref responses_get, ref tasks_get, ..
     //         } => {
-    //             let res1 = get_responses[0].recv().unwrap();
+    //             let res1 = responses_get[0].recv().unwrap();
     //             assert!(res1 == 1);
-    //             let res2 = get_tasks[0].recv().unwrap();
+    //             let res2 = tasks_get[0].recv().unwrap();
     //             res2.call_box();
     //         },
     //         Data::Sender { .. } => { assert!(false); },
@@ -589,21 +610,21 @@ mod tests {
 
     //     match chan2 {
     //         Data::Receiver {
-    //             ref send_requests, ..
+    //             ref requests_send, ..
     //         } => {
-    //             send_requests[0].send(true).unwrap();
+    //             requests_send[0].send(true).unwrap();
     //         },
     //         Data::Sender { .. } => { assert!(false); },
     //     };
 
     //     match chan1 {
     //         Data::Receiver {
-    //             ref get_requests, ref send_responses, ref send_tasks, ..
+    //             ref requests_get, ref responses_send, ref tasks_send, ..
     //         } => {
-    //             let req = get_requests[0].recv().unwrap();
+    //             let req = requests_get[0].recv().unwrap();
     //             assert!(req == true);
-    //             send_responses[0].send(1).unwrap();
-    //             send_tasks[0].send(Box::new(|| {
+    //             responses_send[0].send(1).unwrap();
+    //             tasks_send[0].send(Box::new(|| {
     //                 println!("World!");
     //             }));
     //         },
@@ -612,11 +633,11 @@ mod tests {
 
     //     match chan2 {
     //         Data::Receiver {
-    //             ref get_responses, ref get_tasks, ..
+    //             ref responses_get, ref tasks_get, ..
     //         } => {
-    //             let res1 = get_responses[0].recv().unwrap();
+    //             let res1 = responses_get[0].recv().unwrap();
     //             assert!(res1 == 1);
-    //             let res2 = get_tasks[0].recv().unwrap();
+    //             let res2 = tasks_get[0].recv().unwrap();
     //             res2.call_box();
     //         },
     //         Data::Sender { .. } => { assert!(false); },
@@ -631,21 +652,21 @@ mod tests {
 
     //     match chan1 {
     //         Data::Sender {
-    //             ref send_requests, ..
+    //             ref requests_send, ..
     //         } => {
-    //             send_requests.send(true).unwrap();
+    //             requests_send.send(true).unwrap();
     //         },
     //         Data::Receiver { .. } => { assert!(false); },
     //     };
 
     //     match chan2 {
     //         Data::Sender {
-    //             ref get_requests, ref send_responses, ref send_tasks, ..
+    //             ref requests_get, ref responses_send, ref tasks_send, ..
     //         } => {
-    //             let req = get_requests[0].recv().unwrap();
+    //             let req = requests_get[0].recv().unwrap();
     //             assert!(req == true);
-    //             send_responses[0].send(1).unwrap();
-    //             send_tasks[0].send(Box::new(|| {
+    //             responses_send[0].send(1).unwrap();
+    //             tasks_send[0].send(Box::new(|| {
     //                 println!("Hello!");
     //             })).unwrap();
     //         },
@@ -654,11 +675,11 @@ mod tests {
 
     //     match chan1 {
     //         Data::Sender {
-    //             ref get_responses, ref get_tasks, ..
+    //             ref responses_get, ref tasks_get, ..
     //         } => {
-    //             let res1 = get_responses[0].recv().unwrap();
+    //             let res1 = responses_get[0].recv().unwrap();
     //             assert!(res1 == 1);
-    //             let res2 = get_tasks[0].recv().unwrap();
+    //             let res2 = tasks_get[0].recv().unwrap();
     //             res2.call_box();
     //         },
     //         Data::Receiver { .. } => { assert!(false); },
@@ -666,21 +687,21 @@ mod tests {
 
     //     match chan2 {
     //         Data::Sender {
-    //             ref send_requests, ..
+    //             ref requests_send, ..
     //         } => {
-    //             send_requests.send(true).unwrap();
+    //             requests_send.send(true).unwrap();
     //         },
     //         Data::Receiver { .. } => { assert!(false); },
     //     };
 
     //     match chan1 {
     //         Data::Sender {
-    //             ref get_requests, ref send_responses, ref send_tasks, ..
+    //             ref requests_get, ref responses_send, ref tasks_send, ..
     //         } => {
-    //             let req = get_requests[0].recv().unwrap();
+    //             let req = requests_get[0].recv().unwrap();
     //             assert!(req == true);
-    //             send_responses[0].send(1).unwrap();
-    //             send_tasks[0].send(Box::new(|| {
+    //             responses_send[0].send(1).unwrap();
+    //             tasks_send[0].send(Box::new(|| {
     //                 println!("World!");
     //             })).unwrap();
     //         },
@@ -689,11 +710,11 @@ mod tests {
 
     //     match chan2 {
     //         Data::Sender {
-    //             ref get_responses, ref get_tasks, ..
+    //             ref responses_get, ref tasks_get, ..
     //         } => {
-    //             let res1 = get_responses[0].recv().unwrap();
+    //             let res1 = responses_get[0].recv().unwrap();
     //             assert!(res1 == 1);
-    //             let res2 = get_tasks[0].recv().unwrap();
+    //             let res2 = tasks_get[0].recv().unwrap();
     //             res2.call_box();
     //         },
     //         Data::Receiver { .. } => { assert!(false); },
