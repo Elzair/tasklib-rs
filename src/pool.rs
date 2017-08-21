@@ -26,21 +26,21 @@ impl ThreadPool {
             share_strategy:   share_strategy,
             channel_data:     channels.remove(0),
         });
-
-        let handles = (1..num_threads).into_iter()
-            .map(|n| {
+        
+        let handles = (1..num_threads).into_iter().zip(channels.into_iter())
+            .map(|(index, channel)| {
                 let worker = Worker::new(WorkerConfig {
-                    index:            n,
+                    index:            index,
                     task_capacity:    task_capcity,
                     share_strategy:   share_strategy,
-                    channel_data:     channels.remove(0),
+                    channel_data:     channel,
                 });
 
                 thread::spawn(move || {
                     worker.run();
                 })
             }).collect::<Vec<_>>();
-        
+
         ThreadPool {
             local_worker: local_worker,
             handles: handles,
