@@ -98,7 +98,8 @@ mod tests {
     #[test]
     fn test_spinlock_unlock() {
         let slock = SpinLock::new();
-        let res1 = slock.lock(None);
+        slock.lock(None);
+
         let res2 = slock.unlock();
 
         assert!(res2 == true);
