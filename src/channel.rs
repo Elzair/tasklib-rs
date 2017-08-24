@@ -3,7 +3,7 @@ use std::sync::mpsc;
 use itertools;
 use spmc;
 
-use super::super::Initiated;
+use super::Initiated;
 use task::Task;
 
 pub enum Requests {
@@ -262,7 +262,7 @@ fn transpose_n(n: usize, row_size: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::Initiated;
+    use super::super::Initiated;
     use super::{Data, Requests, make_channels, make_channels_ri, make_channels_si, make_channels_shared, split_vec};
 
     static NT: usize = 4;

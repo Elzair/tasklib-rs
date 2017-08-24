@@ -3,17 +3,17 @@ use std::collections::VecDeque;
 use std::sync::mpsc;
 
 use rand;
-use rand::{Rng,SeedableRng};
+use rand::{Rng, SeedableRng};
 
 use super::ShareStrategy;
 use task::Task;
-use channel;
+use channel::{Data, Requests};
 
 pub struct Config {
     pub index:            usize,
     pub task_capacity:    usize,
     pub share_strategy:   ShareStrategy,
-    pub channel_data:     channel::Data,
+    pub channel_data:     Data,
 }
 
 pub struct Worker {
@@ -22,7 +22,7 @@ pub struct Worker {
     share_strategy: ShareStrategy,
     tasks:          RefCell<VecDeque<Task>>,
     rng:            RefCell<rand::XorShiftRng>,
-    channels:       channel::Data,
+    channels:       Data,
 }
 
 impl Worker {
@@ -80,7 +80,7 @@ impl Worker {
         
         #[allow(unused_variables)]
         match self.channels.requests {
-            channel::Requests::Receiver {
+            Requests::Receiver {
                 ref send, ..
             } => {
                 while !got_tasks {
@@ -98,7 +98,7 @@ impl Worker {
                     }
                 }
             },
-            channel::Requests::Sender {
+            Requests::Sender {
                 ref send, ..
             } => {
                 send.send(true).unwrap();
@@ -132,7 +132,7 @@ impl Worker {
 
     fn process_requests(&self) {
         match self.channels.requests {
-            channel::Requests::Receiver {
+            Requests::Receiver {
                 ref get, ..
             } => {
                 for index in 0..self.channel_length {
@@ -148,7 +148,7 @@ impl Worker {
                     }
                 }
             },
-            channel::Requests::Sender {
+            Requests::Sender {
                 ref get,
                 ..
             } => {
@@ -171,7 +171,6 @@ impl Worker {
     fn share(&self, idx: usize) {
         match self.share_strategy {
             ShareStrategy::ONE => {
-
                 self.channels.responses_send[idx].send(1).unwrap();
                 self.channels.tasks_send[idx].send(self.tasks.borrow_mut()
                                                    .pop_front().unwrap()).unwrap();

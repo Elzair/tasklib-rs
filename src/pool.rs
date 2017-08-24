@@ -4,7 +4,7 @@ use super::{ShareStrategy,Initiated};
 // use task::Task;
 use worker::Worker;
 use worker::Config as WorkerConfig;
-use channel;
+use channel::make_channels;
 
 pub struct ThreadPool {
     local_worker: Worker,
@@ -18,7 +18,7 @@ impl ThreadPool {
                initiated:      Initiated) -> ThreadPool {
         assert!(num_threads > 0);
 
-        let mut channels = channel::make_channels(num_threads, initiated);
+        let mut channels = make_channels(num_threads, initiated);
 
         let local_worker = Worker::new(WorkerConfig {
             index:            0,
