@@ -54,16 +54,12 @@ impl Worker {
     }
 
     pub fn run_once(&self) {
-        // Popping the task first ensures this Worker does not
-        // give away its only task.
-        match self.tasks.borrow_mut().pop_front() {
-            Some(task) => {
-                self.process_requests();
-                self.execute(task);
-            },
-            None => {
-                self.acquire_tasks();
-            },
+        if self.tasks.borrow().is_empty() {
+            self.acquire_tasks();
+        }
+        else {
+            self.execute(self.tasks.borrow_mut().pop_front().unwrap());
+            self.process_requests();
         }
     }
 
@@ -137,11 +133,9 @@ impl Worker {
             } => {
                 for index in 0..self.channel_length {
                     // Do not trying sharing tasks if we do not have any.
-                    if self.tasks.borrow().len() == 0 {
+                    if self.tasks.borrow().is_empty() {
                         break;
                     }
-
-                    // let idx = index % self.channel_length;
                     
                     if let Ok(_) = get[index].try_recv() {
                         self.share(index);
@@ -149,16 +143,13 @@ impl Worker {
                 }
             },
             Requests::Sender {
-                ref get,
-                ..
+                ref get, ..
             } => {
                 for index in 0..self.channel_length {
                     // Do not trying sharing tasks if we do not have any.
-                    if self.tasks.borrow().len() == 0 {
+                    if self.tasks.borrow().is_empty() {
                         break;
                     }
-
-                    // let idx = index % self.channel_length;
 
                     if let Ok(_) = get[index].try_recv() {
                         self.share(index);
@@ -180,8 +171,10 @@ impl Worker {
 
                 self.channels.responses_send[idx].send(half_len).unwrap();
 
-                for task in self.tasks.borrow_mut().split_off(half_len) {
-                    self.channels.tasks_send[idx].send(task).unwrap();
+                if half_len > 0 {
+                    for task in self.tasks.borrow_mut().split_off(half_len) {
+                        self.channels.tasks_send[idx].send(task).unwrap();
+                    }
                 }
             },
         }
