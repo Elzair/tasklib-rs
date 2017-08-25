@@ -3,6 +3,8 @@ extern crate spmc;
 extern crate itertools;
 extern crate rand;
 
+use std::time::Duration;
+
 pub mod task;
 mod worker;
 pub mod pool;
@@ -20,6 +22,12 @@ pub enum ShareStrategy {
 pub enum Initiated {
     SENDER,
     RECEIVER,
+}
+
+#[derive(Clone, Copy)]
+pub enum ReceiverWaitStrategy {
+    Yield,
+    Sleep(Duration),
 }
 
 pub use task::Task;

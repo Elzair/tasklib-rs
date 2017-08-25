@@ -1,6 +1,9 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::time::{Instant, Duration};
+use std::thread;
 
+use super::ReceiverWaitStrategy as WaitStrategy;
 use task::Task;
 
 pub enum Data {
@@ -9,12 +12,19 @@ pub enum Data {
     ManyTasks(VecDeque<Task>),
 }
 
-pub fn make_taskchan() -> (Sender, Receiver) {
+pub fn make_taskchan(
+    rx_wait: WaitStrategy,
+    rx_timeout: Duration,
+) -> (Sender, Receiver) {
     let inner: Arc<Mutex<Option<Data>>> = Arc::new(Mutex::new(None));
     
     (
         Sender { inner: inner.clone() },
-        Receiver { inner: inner.clone() },
+        Receiver {
+            inner: inner.clone(),
+            wait_strategy: rx_wait,
+            timeout: rx_timeout,
+        },
     )
 }
 
@@ -39,6 +49,8 @@ impl Sender {
 
 pub struct Receiver {
     inner: Arc<Mutex<Option<Data>>>,
+    wait_strategy: WaitStrategy,
+    timeout: Duration,
 }
 
 impl Receiver {
@@ -48,6 +60,30 @@ impl Receiver {
         match (*value).take() {
             Some(x) => Ok(x),
             None => Err(TryReceiveError::Empty),
+        }
+    }
+
+    pub fn receive(&self) -> Result<Data, ReceiveError> {
+        let start_time = Instant::now();
+        
+        loop {
+            if let Ok(data) = self.try_receive() {
+                return Ok(data);
+            }
+            else {
+                match self.wait_strategy {
+                    WaitStrategy::Yield => {
+                        thread::yield_now();
+                    },
+                    WaitStrategy::Sleep(duration) => {
+                        thread::sleep(duration);
+                    },
+                };
+            }
+
+            if Instant::now().duration_since(start_time) >= self.timeout {
+                return Err(ReceiveError::Timeout);
+            }
         }
     }
 }
@@ -62,24 +98,39 @@ pub enum TryReceiveError {
     Empty,
 }
 
+#[derive(Debug)]
+pub enum ReceiveError {
+    Timeout,
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use super::{Data, SendError, TryReceiveError, make_taskchan};
+    use std::time::Duration;
+    
+    use super::{Data, Sender, Receiver, SendError, TryReceiveError, ReceiveError, make_taskchan};
+    use super::super::ReceiverWaitStrategy;
     use super::super::task::Task;
+
+    fn helper() -> (Sender, Receiver) {
+        make_taskchan(
+            ReceiverWaitStrategy::Sleep(Duration::new(0, 10000)),
+            Duration::new(0, 1000000)
+        )
+    }
 
     #[test]
     fn test_creation() {
         #[allow(unused_variables)]
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = helper();
     }
 
     #[test]
     fn test_sender_send_no_tasks() {
         #[allow(unused_variables)]
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = helper();
 
         tx.send(Data::NoTasks).unwrap();
 
@@ -92,7 +143,7 @@ mod tests {
     #[test]
     fn test_sender_send_one_task() {
         #[allow(unused_variables)]
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = helper();
 
         let data = Data::OneTask(Box::new(|| { println!("Hello world!"); }));
         tx.send(data).unwrap();
@@ -106,7 +157,7 @@ mod tests {
     #[test]
     fn test_sender_send_many_tasks() {
         #[allow(unused_variables)]
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = helper();
 
         let data1 = Box::new(|| { println!("Hello world!"); });
         let data2 = Box::new(|| { println!("Hello again!"); });
@@ -125,7 +176,7 @@ mod tests {
     #[test]
     fn test_sender_send_unreceived() {
         #[allow(unused_variables)]
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = helper();
 
         tx.send(Data::NoTasks).unwrap();
 
@@ -137,8 +188,7 @@ mod tests {
 
     #[test]
     fn test_receiver_try_receive_no_tasks() {
-        #[allow(unused_variables)]
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = helper();
 
         tx.send(Data::NoTasks).unwrap();
 
@@ -147,7 +197,7 @@ mod tests {
             _ => { assert!(false); },
         };
 
-        match *tx.inner.lock().unwrap() {
+        match *rx.inner.lock().unwrap() {
             None => {},
             _ => { assert!(false); },
         };
@@ -155,8 +205,7 @@ mod tests {
 
     #[test]
     fn test_receiver_try_receive_one_task() {
-        #[allow(unused_variables)]
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = helper();
 
         let var = Arc::new(AtomicUsize::new(0));
         let var2 = var.clone();
@@ -176,7 +225,7 @@ mod tests {
 
         assert_eq!(var.load(Ordering::SeqCst), 1);
 
-        match *tx.inner.lock().unwrap() {
+        match *rx.inner.lock().unwrap() {
             None => {},
             _ => { assert!(false); },
         };
@@ -184,8 +233,7 @@ mod tests {
 
     #[test]
     fn test_receiver_try_receive_many_tasks() {
-        #[allow(unused_variables)]
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = helper();
 
         let var = Arc::new(AtomicUsize::new(0));
         let var1 = var.clone();
@@ -217,7 +265,7 @@ mod tests {
 
         assert_eq!(var.load(Ordering::SeqCst), 2);
 
-        match *tx.inner.lock().unwrap() {
+        match *rx.inner.lock().unwrap() {
             None => {},
             _ => { assert!(false); },
         };
@@ -226,7 +274,7 @@ mod tests {
     #[test]
     fn test_receiver_try_receive_empty() {
         #[allow(unused_variables)]
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = helper();
 
         match rx.try_receive() {
             Err(TryReceiveError::Empty) => {},
@@ -234,4 +282,31 @@ mod tests {
         };
     }
 
+    #[test]
+    fn test_receiver_receive() {
+        let (tx, rx) = helper();
+
+        tx.send(Data::NoTasks).unwrap();
+
+        match rx.receive() {
+            Ok(Data::NoTasks) => {},
+            _ => { assert!(false); },
+        };
+
+        match *rx.inner.lock().unwrap() {
+            None => {},
+            _ => { assert!(false); },
+        };
+    }
+
+    #[test]
+    fn test_receiver_receive_timeout() {
+        #[allow(unused_variables)]
+        let (tx, rx) = helper();
+
+        match rx.receive() {
+            Err(ReceiveError::Timeout) => {},
+            _ => { assert!(false); },
+        };
+    }
 }

@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub fn make_boolchan() -> (Sender, Receiver) {
     let inner = Arc::new(AtomicBool::new(false));
