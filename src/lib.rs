@@ -6,6 +6,8 @@ extern crate rand;
 pub mod task;
 mod worker;
 pub mod pool;
+// mod boolchan;
+// mod taskchan;
 mod channel;
 
 #[derive(Clone, Copy)]

@@ -386,29 +386,6 @@ mod tests {
         }
     }
 
-    // macro_rules! tstcomm {
-    //     ($type:ident, $data1:ident, $send:ident, $idx1:expr,
-    //      $var:expr, $data2:ident, $recv:ident, $idx2:expr) => (
-    //         match $data1 {
-    //             $type {
-    //                 ref $send, ..
-    //             } => {
-    //                 $send[$idx1].send($var).unwrap();
-    //             },
-    //             _ => { assert!(false); }
-    //         };
-    //         match $data2 {
-    //             $type {
-    //                 ref $recv, ..
-    //             } => {
-    //                 let d = $recv[$idx2].recv().unwrap();
-    //                 assert!(d == $var);
-    //             },
-    //             _ => { assert!(false); }
-    //         };
-    //     );
-    // }
-
     macro_rules! tstcomm_reqs_ri {
         ($chan1:ident, $idx1:expr, $var:expr,
          $chan2:ident, $idx2:expr) => (
