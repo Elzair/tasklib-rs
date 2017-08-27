@@ -1,59 +1,71 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use rand;
 use rand::{Rng, SeedableRng};
 
 use super::{ShareStrategy, ReceiverWaitStrategy};
-use super::boolchan as bc;
-use super::channel::Data as ChannelData;
-use super::channel::Channel;
+use super::channel::boolchan as bc;
+use super::channel::{DataRI, DataSI};
 use super::task::Task;
 use super::task::Data as TaskData;
-use super::taskchan as tc;
 
-pub struct Config {
-    pub index:            usize,
-    pub task_capacity:    usize,
-    pub share_strategy:   ShareStrategy,
-    pub wait_strategy:  ReceiverWaitStrategy,
-    pub channel_data:     ChannelData,
+pub struct ConfigRI {
+    pub index: usize,
+    pub task_capacity: usize,
+    pub share_strategy: ShareStrategy,
+    pub wait_strategy: ReceiverWaitStrategy,
+    pub timeout: Option<Duration>,
+    pub channel_data: DataRI,
 }
 
-pub struct Worker {
-    pub index:      usize,
-    channel_length: usize,
+pub struct WorkerRI {
+    pub index: usize,
     share_strategy: ShareStrategy,
-    wait_strategy:  ReceiverWaitStrategy,
-    tasks:          RefCell<VecDeque<Task>>,
-    rng:            RefCell<rand::XorShiftRng>,
-    channel_data:   ChannelData,
+    wait_strategy: ReceiverWaitStrategy,
+    rng: RefCell<rand::XorShiftRng>,
+    timeout: Option<Duration>,
+    tasks: RefCell<VecDeque<Task>>,
+    channel_data: DataRI,
 }
 
-impl Worker {
-    pub fn new(config: Config) -> Worker {
-        let Config { index,
-                     task_capacity: capacity,
-                     share_strategy: share_strategy,
-                     wait_strategy: wait_strategy,
-                     channel_data: channel_data,
+impl WorkerRI {
+    pub fn new(config: ConfigRI) -> WorkerRI {
+        let ConfigRI { index,
+                       task_capacity,
+                       share_strategy,
+                       wait_strategy,
+                       timeout,
+                       channel_data,
         } = config;
 
-        let len = match channel_data {
-            ChannelData::Receiver { ref channels } => { channels.len() },
-            ChannelData::Sender { ref channels, .. } => { channels.len() },
-        };
+        // Generate the seed of the worker's RNG.
+        let mut tmp_rng = rand::thread_rng();
+        let mut seed: [u32; 4] = [0, 0, 0, 0];
+        let mut good_seed = false;
 
-        Worker {
+        while good_seed == false {
+            seed[0] = tmp_rng.gen::<u32>();
+            seed[1] = tmp_rng.gen::<u32>();
+            seed[2] = tmp_rng.gen::<u32>();
+            seed[3] = tmp_rng.gen::<u32>();
+
+            // `rand::XorShiftRng` will panic if the seed is all zeroes.
+            // Ensure that does not happen.
+            if !(seed[0] == 0 && seed[1] == 0 && seed[2] == 0 && seed[3] == 0) {
+                good_seed = true;
+            }
+        }
+
+        WorkerRI {
             index: index,
-            channel_length: len,
             share_strategy: share_strategy,
             wait_strategy: wait_strategy,
-            tasks: RefCell::new(VecDeque::with_capacity(capacity)),
-            rng: RefCell::new(rand::XorShiftRng::from_seed([
-                0, 0, 0, (index+1) as u32 // The seed cannot be all 0's
-            ])),
+            rng: RefCell::new(rand::XorShiftRng::from_seed(seed)),
+            timeout: timeout,
+            tasks: RefCell::new(VecDeque::with_capacity(task_capacity)),
             channel_data: channel_data,
         }
     }
@@ -70,7 +82,7 @@ impl Worker {
             self.acquire_tasks();
         }
         else {
-            self.execute(self.tasks.borrow_mut().pop_front().unwrap());
+            self.tasks.borrow_mut().pop_front().unwrap().call_box();
             self.process_requests();
         }
     }
@@ -78,7 +90,7 @@ impl Worker {
     #[inline]
     pub fn add_tasks(&self, task_data: TaskData) -> bool {
         match task_data {
-            TaskData::ManyTasks(tasks) => {
+            TaskData::ManyTasks(mut tasks) => {
                 self.tasks.borrow_mut().append(&mut tasks);
                 true
             },
@@ -90,173 +102,333 @@ impl Worker {
         }
     }
 
-    #[inline]
-    fn execute(&self, task: Task) {
-        task.call_box();
-    }
+    fn try_get_tasks(&self, index: usize) -> bool {
+        let start_time = Instant::now();
 
-    fn try_get_tasks_ri(&self,
-                        request_send: bc::Sender,
-                        task_get: tc::Receiver) -> bool {
-        
+        loop {
+            if let Ok(task_data) = self.channel_data.channels[index]
+                .task_get.try_receive() {
+                self.add_tasks(task_data);
+                return true;
+            }
+
+            match self.wait_strategy {
+                ReceiverWaitStrategy::Sleep(duration) => {
+                    thread::sleep(duration);
+                },
+                ReceiverWaitStrategy::Yield => {
+                    thread::yield_now();
+                },
+            };
+
+            if let Some(timeout) = self.timeout {
+                if Instant::now().duration_since(start_time) >= timeout {
+                    return false;
+                }
+            }
+        }
     }
 
     fn acquire_tasks(&self) {
         let mut got_tasks = false;
-        
-        match self.channel_data {
-            ChannelData::Receiver {
-                ref channels, ..
-            } => {
-                while !got_tasks {
-                    let ridx = self.rand_index();
-                    
-                    match channels[ridx] {
-                        Channel::Receiver {
-                            ref request_send,
-                            ref task_get,
-                            ..
-                        } => {
-                            // Send request.
-                            request_send.send().unwrap();
 
-                            // Wait for either tasks or timeout.
-                            match task_get.receive() {
-                                Ok(data) => {
-                                    if self.add_tasks(data) == true {
-                                        got_tasks = true;
-                                    }
-                                },
-                                Err(tc::ReceiveError::Timeout) => {
-                                    // Try to 
-                                    match request_send.try_unsend() {
-                                        Err(bc::TryUnsendError::TooLate) => {
-                                            if self.add_tasks(
-                                                task_get.receive_no_timeout()
-                                            ) == true {
-                                                got_tasks = true;
-                                            };
-                                        },
-                                    }
-                                },
-                            }
-                        },
-                        _ => {},
-                    }
-                }
-            },
-            Requests::Sender {
-                ref send, ..
-            } => {
-                send.send(true).unwrap();
+        while !got_tasks {
+            let rand_idx = self.rand_index();
 
-                // Loop waiting for other workers to send tasks
-                let mut ridx = 0;
-
-                while !got_tasks {
-                    let num_tasks = match self.channels.responses_get[ridx].try_recv() {
-                        Ok(nt) => nt,
-                        Err(mpsc::TryRecvError::Empty) => {
-                            ridx = (ridx + 1) % self.channel_length;
-                            continue;
-                        },
-                        // TODO: Do something else instead of panicking.
-                        _ => {
-                            panic!("Sender panicked!");
+            // Send request.
+            self.channel_data.channels[rand_idx].request_send.send().unwrap();
+            
+            // Wait for either tasks or timeout.
+            match self.try_get_tasks(rand_idx) {
+                true => {
+                    got_tasks = true;
+                },
+                false => {
+                    // Try to unsend request.
+                    match self.channel_data.channels[rand_idx]
+                        .request_send.try_unsend() {
+                            // If we are too late, just block until we get all the tasks.
+                            Err(bc::TryUnsendError::TooLate) => {
+                                self.add_tasks(self.channel_data.channels[rand_idx]
+                                               .task_get.receive());
+                            },
+                            _ => {},
                         }
-                    };
-
-                    for n in 0..num_tasks {
-                        self.tasks.borrow_mut().push_back(self.channels
-                                                          .tasks_get[ridx]
-                                                          .recv().unwrap());
-                        got_tasks = true;
-                    }
-                }
-            },
+                },
+            }
         }
     }
 
     fn process_requests(&self) {
-        match self.channels.requests {
-            Requests::Receiver {
-                ref get, ..
-            } => {
-                for index in 0..self.channel_length {
-                    // Do not trying sharing tasks if we do not have any.
-                    if self.tasks.borrow().is_empty() {
-                        break;
-                    }
-                    
-                    if let Ok(_) = get[index].try_recv() {
-                        self.share(index);
-                    }
-                }
-            },
-            Requests::Sender {
-                ref get, ..
-            } => {
-                for index in 0..self.channel_length {
-                    // Do not trying sharing tasks if we do not have any.
-                    if self.tasks.borrow().is_empty() {
-                        break;
-                    }
+        // Start searching for requests on a random channel.
+        // This *should* prevent channels that occur earlier in
+        // the `channel_data.channels` queue from getting
+        // preferential treatment.
+        let start = self.rand_index();
+        let len = self.channel_data.channels.len();
 
-                    if let Ok(_) = get[index].try_recv() {
-                        self.share(index);
-                    }
-                }
-            },
+        for idx in 0..len {
+            // This makes sure the search wraps around to earlier channels.
+            let index = (start + idx) % len;
+
+            // Do not trying sharing tasks if we do not have any.
+            if self.tasks.borrow().is_empty() {
+                break;
+            }
+            
+            // Share tasks with any thread that requests them.
+            if self.channel_data.channels[index]
+                .request_get.receive() == true {
+                    self.share(index);
+            }
         }
     }
 
     fn share(&self, idx: usize) {
         match self.share_strategy {
-            ShareStrategy::ONE => {
-                self.channels.responses_send[idx].send(1).unwrap();
-                self.channels.tasks_send[idx].send(self.tasks.borrow_mut()
-                                                   .pop_front().unwrap()).unwrap();
+            ShareStrategy::One => {
+                self.channel_data.channels[idx].task_send.send(
+                    TaskData::OneTask(self.tasks.borrow_mut().pop_front()
+                                      .unwrap())
+                ).unwrap();
             },
-            ShareStrategy::HALF => {
+            ShareStrategy::Half => {
                 let half_len = self.tasks.borrow().len() / 2;
 
-                self.channels.responses_send[idx].send(half_len).unwrap();
-
                 if half_len > 0 {
-                    for task in self.tasks.borrow_mut().split_off(half_len) {
-                        self.channels.tasks_send[idx].send(task).unwrap();
-                    }
+                    self.channel_data.channels[idx].task_send.send(
+                        TaskData::ManyTasks(self.tasks.borrow_mut()
+                                            .split_off(half_len))
+                    ).unwrap();
                 }
             },
         }
     }
 
     fn rand_index(&self) -> usize {
-        (self.rng.borrow_mut().next_u32() as usize) % self.channel_length
+        (self.rng.borrow_mut().next_u32() as usize)
+            % self.channel_data.channels.len()
+    }
+}
+
+pub struct ConfigSI {
+    pub index: usize,
+    pub task_capacity: usize,
+    pub share_strategy: ShareStrategy,
+    pub wait_strategy: ReceiverWaitStrategy,
+    pub channel_data: DataSI,
+}
+
+pub struct WorkerSI {
+    pub index: usize,
+    share_strategy: ShareStrategy,
+    wait_strategy: ReceiverWaitStrategy,
+    rng: RefCell<rand::XorShiftRng>,
+    tasks: RefCell<VecDeque<Task>>,
+    channel_data: DataSI,
+}
+
+impl WorkerSI {
+    pub fn new(config: ConfigSI) -> WorkerSI {
+        let ConfigSI { index,
+                       task_capacity,
+                       share_strategy,
+                       wait_strategy,
+                       channel_data,
+        } = config;
+
+        // Generate the seed of the worker's RNG.
+        let mut tmp_rng = rand::thread_rng();
+        let mut seed: [u32; 4] = [0, 0, 0, 0];
+        let mut good_seed = false;
+
+        while good_seed == false {
+            seed[0] = tmp_rng.gen::<u32>();
+            seed[1] = tmp_rng.gen::<u32>();
+            seed[2] = tmp_rng.gen::<u32>();
+            seed[3] = tmp_rng.gen::<u32>();
+
+            // `rand::XorShiftRng` will panic if the seed is all zeroes.
+            // Ensure that does not happen.
+            if !(seed[0] == 0 && seed[1] == 0 && seed[2] == 0 && seed[3] == 0) {
+                good_seed = true;
+            }
+        }
+
+        WorkerSI {
+            index: index,
+            share_strategy: share_strategy,
+            wait_strategy: wait_strategy,
+            rng: RefCell::new(rand::XorShiftRng::from_seed(seed)),
+            tasks: RefCell::new(VecDeque::with_capacity(task_capacity)),
+            channel_data: channel_data,
+        }
+    }
+
+    pub fn run(&self) {
+        loop {
+            self.run_once();
+        }
+    }
+
+    #[inline]
+    pub fn run_once(&self) {
+        if self.tasks.borrow().is_empty() {
+            self.acquire_tasks();
+        }
+        else {
+            self.tasks.borrow_mut().pop_front().unwrap().call_box();
+            self.process_requests();
+        }
+    }
+
+    #[inline]
+    pub fn add_tasks(&self, task_data: TaskData) -> bool {
+        match task_data {
+            TaskData::ManyTasks(mut tasks) => {
+                self.tasks.borrow_mut().append(&mut tasks);
+                true
+            },
+            TaskData::OneTask(task) => {
+                self.tasks.borrow_mut().push_back(task);
+                true
+            },
+            TaskData::NoTasks => { false },
+        }
+    }
+
+    fn acquire_tasks(&self) {
+        // Send request.
+        self.channel_data.request_send.send().unwrap();
+
+        // Wait for any other worker to respond.
+        let mut got_tasks = false;
+
+        while got_tasks == false {
+            for channel in self.channel_data.channels.iter() {
+                if let Ok(task_data) = channel.task_get.try_receive() {
+                    self.add_tasks(task_data);
+                    got_tasks = true;
+                }
+            }
+
+            if got_tasks == false {
+                match self.wait_strategy {
+                    ReceiverWaitStrategy::Sleep(duration) => {
+                        thread::sleep(duration);
+                    },
+                    ReceiverWaitStrategy::Yield => {
+                        thread::yield_now();
+                    },
+                };
+            }
+        }
+    }
+
+    fn process_requests(&self) {
+        // Start searching for requests on a random channel.
+        // This *should* prevent channels that occur earlier in
+        // the `channel_data.channels` queue from getting
+        // preferential treatment.
+        let start = self.rand_index();
+        let len = self.channel_data.channels.len();
+
+        for idx in 0..len {
+            // This makes sure the search wraps around to earlier channels.
+            let index = (start + idx) % len;
+
+            // Do not trying sharing tasks if we do not have any.
+            if self.tasks.borrow().is_empty() {
+                break;
+            }
+            
+            // Share tasks with any thread that requests them.
+            if self.channel_data.channels[index]
+                .request_get.receive() == true {
+                    self.share(index);
+            }
+        }
+    }
+
+    fn share(&self, index: usize) {
+        match self.share_strategy {
+            ShareStrategy::One => {
+                self.channel_data.channels[index].task_send.send(
+                    TaskData::OneTask(self.tasks.borrow_mut().pop_front()
+                                      .unwrap())
+                ).unwrap();
+            },
+            ShareStrategy::Half => {
+                let half_len = self.tasks.borrow().len() / 2;
+
+                if half_len > 0 {
+                    self.channel_data.channels[index].task_send.send(
+                        TaskData::ManyTasks(self.tasks.borrow_mut()
+                                            .split_off(half_len))
+                    ).unwrap();
+                }
+            },
+        }
+    }
+
+    fn rand_index(&self) -> usize {
+        (self.rng.borrow_mut().next_u32() as usize)
+            % self.channel_data.channels.len()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Worker, Config};
-    use super::super::{Initiated, ShareStrategy};
-    use super::super::channel::make_channels;
+    use std::time::Duration;
+    
+    use super::{ConfigRI, ConfigSI, WorkerRI, WorkerSI};
+    use super::super::{ShareStrategy, ReceiverWaitStrategy};
+    use super::super::channel::{make_receiver_initiated_channels, make_sender_initiated_channels};
+    use super::super::task::Data as TaskData;
 
-    fn helper(initiated: Initiated,
-              share: ShareStrategy) -> (Worker, Worker) {
-        let mut channels = make_channels(2, initiated);
+    fn helper_ri(share: ShareStrategy,
+                 timeout: Option<Duration>)
+                 -> (WorkerRI, WorkerRI) {
+        let mut channels = make_receiver_initiated_channels(2);
         
-        let worker1 = Worker::new(Config {
+        let worker1 = WorkerRI::new(ConfigRI {
             index: 0,
             task_capacity: 16,
             share_strategy: share,
+            wait_strategy: ReceiverWaitStrategy::Yield,
+            timeout: timeout,
             channel_data: channels.remove(0),
         });
         
-        let worker2 = Worker::new(Config {
+        let worker2 = WorkerRI::new(ConfigRI {
             index: 0,
             task_capacity: 16,
             share_strategy: share,
+            wait_strategy: ReceiverWaitStrategy::Yield,
+            timeout: timeout,
+            channel_data: channels.remove(0),
+        });
+
+        (worker1, worker2)
+    }
+
+    fn helper_si(share: ShareStrategy)
+                 -> (WorkerSI, WorkerSI) {
+        let mut channels = make_sender_initiated_channels(2);
+        
+        let worker1 = WorkerSI::new(ConfigSI {
+            index: 0,
+            task_capacity: 16,
+            share_strategy: share,
+            wait_strategy: ReceiverWaitStrategy::Yield,
+            channel_data: channels.remove(0),
+        });
+        
+        let worker2 = WorkerSI::new(ConfigSI {
+            index: 0,
+            task_capacity: 16,
+            share_strategy: share,
+            wait_strategy: ReceiverWaitStrategy::Yield,
             channel_data: channels.remove(0),
         });
 
@@ -265,34 +437,32 @@ mod tests {
 
     #[test]
     fn test_make_worker_ri() {
-        let mut channels = make_channels(2, Initiated::RECEIVER);
         #[allow(unused_variables)]
-        let worker = Worker::new(Config {
-            index: 0,
-            task_capacity: 16,
-            share_strategy: ShareStrategy::ONE,
-            channel_data: channels.remove(0),
-        });
+        let (worker1, worker2) = helper_ri(ShareStrategy::One, None);
     }
 
     #[test]
     fn test_make_worker_si() {
-        let mut channels = make_channels(2, Initiated::SENDER);
         #[allow(unused_variables)]
-        let worker = Worker::new(Config {
-            index: 0,
-            task_capacity: 16,
-            share_strategy: ShareStrategy::ONE,
-            channel_data: channels.remove(0),
-        });
+        let (worker1, worker2) = helper_si(ShareStrategy::One);
     }
 
     #[test]
-    fn test_worker_addtask() {
-        let (worker, _) = helper(Initiated::RECEIVER, ShareStrategy::ONE);
+    fn test_worker_ri_addtask() {
+        let (worker, _) = helper_ri(ShareStrategy::One, None);
 
-        worker.add_task(Box::new(|| { println!("Hello World!");}));
+        worker.add_tasks(TaskData::OneTask(Box::new(|| { println!("Hello World!");})));
 
         assert!(worker.tasks.borrow_mut().len() == 1);
     }
+
+    #[test]
+    fn test_worker_si_addtask() {
+        let (worker, _) = helper_si(ShareStrategy::One);
+
+        worker.add_tasks(TaskData::OneTask(Box::new(|| { println!("Hello World!");})));
+
+        assert!(worker.tasks.borrow_mut().len() == 1);
+    }
+
 }

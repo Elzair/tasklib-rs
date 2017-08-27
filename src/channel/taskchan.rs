@@ -1,9 +1,6 @@
 use std::sync::{Arc, Mutex};
-use std::thread;
 
-use super::task::Task;
-use super::task::Data as TaskData;
-
+use super::super::task::Data as TaskData;
 
 pub fn make_taskchan() -> (Sender, Receiver) {
     let inner: Arc<Mutex<Option<TaskData>>> = Arc::new(Mutex::new(None));
@@ -69,21 +66,14 @@ pub enum TryReceiveError {
     Empty,
 }
 
-#[derive(Debug)]
-pub enum ReceiveError {
-    Timeout,
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
     
-    use super::{TaskData, Sender, Receiver, SendError, TryReceiveError, ReceiveError, make_taskchan};
-    use super::super::ReceiverWaitStrategy;
-    use super::super::task::Task;
+    use super::{TaskData, SendError, TryReceiveError, make_taskchan};
+    use super::super::super::task::Task;
 
     #[test]
     fn test_creation() {
