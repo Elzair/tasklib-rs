@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 /// This trait allows a boxed closure to move itself out of its `Box`
 /// in order to take ownership of itself.
 pub trait FnBox {
@@ -13,3 +15,9 @@ impl<F: FnOnce()> FnBox for F {
 }
 
 pub type Task = Box<FnBox + Send + 'static>;
+
+pub enum Data {
+    NoTasks,
+    OneTask(Task),
+    ManyTasks(VecDeque<Task>),
+}

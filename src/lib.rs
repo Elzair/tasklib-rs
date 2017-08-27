@@ -14,14 +14,14 @@ mod channel;
 
 #[derive(Clone, Copy)]
 pub enum ShareStrategy {
-    ONE,
-    HALF,
+    One,
+    Half,
 }
 
 #[derive(Clone, Copy)]
 pub enum Initiated {
-    SENDER,
-    RECEIVER,
+    Sender,
+    Receiver,
 }
 
 #[derive(Clone, Copy)]

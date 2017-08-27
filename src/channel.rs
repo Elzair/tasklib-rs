@@ -1,79 +1,84 @@
-use std::sync::mpsc;
+use std::time::Duration;
 
 use itertools;
-use spmc;
 
-use super::Initiated;
-use task::Task;
+use super::{Initiated, ReceiverWaitStrategy};
+use super::boolchan as bc;
+use super::taskchan as tc;
 
-pub enum Requests {
-    Receiver
-    {
-        send: Vec<mpsc::Sender<bool>>,
-        get: Vec<mpsc::Receiver<bool>>,
+pub enum Channel {
+    Receiver {
+        request_send: bc::Sender,
+        request_get: bc::Receiver,
+        task_send: tc::Sender,
+        task_get: tc::Receiver,
     },
-    Sender
-    {
-        send: spmc::Sender<bool>,
-        get: Vec<spmc::Receiver<bool>>,
+    Sender {
+        request_get: bc::Receiver,
+        task_send: tc::Sender,
+        task_get: tc::Receiver,
     },
 }
 
-pub struct Data
-{
-    pub requests: Requests,
-    pub responses_send: Vec<mpsc::Sender<usize>>,
-    pub responses_get: Vec<mpsc::Receiver<usize>>,
-    pub tasks_send: Vec<mpsc::Sender<Task>>,
-    pub tasks_get: Vec<mpsc::Receiver<Task>>,
+pub enum Data {
+    Receiver {
+        channels: Vec<Channel>,
+    },
+    Sender {
+        request_send: bc::Sender,
+        channels: Vec<Channel>,
+    },
 }
 
 pub fn make_channels(num_threads: usize,
-                     initiated: Initiated ) -> Vec<Data>
+                     initiated: Initiated) -> Vec<Data>
 {
-    let (resp_tx, resp_rx,
-         jobs_tx, jobs_rx) = make_channels_shared(num_threads);
+    let (tasks_tx, tasks_rx) = make_channels_shared(num_threads);
     
     match initiated {
-        Initiated::RECEIVER => {
-            let (rqst_tx, rqst_rx) = make_channels_ri(num_threads);
+        Initiated::Receiver => {
+            let (rqsts_tx, rqsts_rx) = make_channels_ri(num_threads);
 
-            itertools::multizip((rqst_tx, rqst_rx,
-                                 resp_tx, resp_rx,
-                                 jobs_tx, jobs_rx))
+            itertools::multizip((rqsts_tx, rqsts_rx,
+                                 tasks_tx, tasks_rx))
                 .map(|(requests_send, requests_get,
-                       responses_send, responses_get,
                        tasks_send, tasks_get)| {
-                    Data {
-                        requests: Requests::Receiver {
-                            send: requests_send,
-                            get: requests_get,
-                        },
-                        responses_send: responses_send,
-                        responses_get: responses_get,
-                        tasks_send: tasks_send,
-                        tasks_get: tasks_get,
+                    Data::Receiver {
+                        channels: itertools::multizip((requests_send,
+                                                       requests_get,
+                                                       tasks_send,
+                                                       tasks_get))
+                            .map(|(request_send, request_get,
+                                   task_send, task_get)| {
+                                Channel::Receiver {
+                                    request_send: request_send,
+                                    request_get: request_get,
+                                    task_send: task_send,
+                                    task_get: task_get,
+                                }
+                            }).collect::<Vec<Channel>>()
                     }
                 }).collect::<Vec<Data>>()
         },
-        Initiated::SENDER => {
-            let (rqst_tx, rqst_rx) = make_channels_si(num_threads);
+        Initiated::Sender => {
+            let (rqsts_tx, rqsts_rx) = make_channels_si(num_threads);
 
-            itertools::multizip((rqst_tx, rqst_rx,
-                                 resp_tx, resp_rx,
-                                 jobs_tx, jobs_rx))
-                .map(|(requests_send, requests_get,
-                       responses_send, responses_get,
+            itertools::multizip((rqsts_tx, rqsts_rx,
+                                 tasks_tx, tasks_rx))
+                .map(|(request_send, requests_get,
                        tasks_send, tasks_get)| {
-                    Data {
-                        requests: Requests::Sender {
-                            send: requests_send,
-                            get: requests_get,
-                        },
-                        responses_send: responses_send,
-                        responses_get: responses_get,
-                        tasks_send: tasks_send,
-                        tasks_get: tasks_get,
+                    Data::Sender {
+                        request_send: request_send,
+                        channels: itertools::multizip((requests_get,
+                                                       tasks_send,
+                                                       tasks_get))
+                            .map(|(request_get, task_send, task_get)| {
+                                Channel::Sender {
+                                    request_get: request_get,
+                                    task_send: task_send,
+                                    task_get: task_get,
+                                }
+                            }).collect::<Vec<Channel>>(),
                     }
                 }).collect::<Vec<Data>>()
         },
@@ -81,14 +86,14 @@ pub fn make_channels(num_threads: usize,
 }
 
 fn make_channels_ri(num_threads: usize)
-                    -> (Vec<Vec<mpsc::Sender<bool>>>,
-                        Vec<Vec<mpsc::Receiver<bool>>>)
+                    -> (Vec<Vec<bc::Sender>>,
+                        Vec<Vec<bc::Receiver>>)
 {
     let ntsq = num_threads * num_threads;
     
     // Model the channels as several NxN matrices.
-    let mut rqst_tx = Vec::<Option<mpsc::Sender<bool>>>::with_capacity(ntsq);
-    let mut rqst_rx = Vec::<Option<mpsc::Receiver<bool>>>::with_capacity(ntsq);
+    let mut rqst_tx = Vec::<Option<bc::Sender>>::with_capacity(ntsq);
+    let mut rqst_rx = Vec::<Option<bc::Receiver>>::with_capacity(ntsq);
     
     for n in 0..ntsq {
         match is_same_thread(n, num_threads) {
@@ -97,7 +102,7 @@ fn make_channels_ri(num_threads: usize)
                 rqst_rx.push(None);
             },
             false => {
-                let (tx, rx) = mpsc::channel::<bool>();
+                let (tx, rx) = bc::make_boolchan();
                 rqst_tx.push(Some(tx));
                 rqst_rx.push(Some(rx));
             },
@@ -112,6 +117,8 @@ fn make_channels_ri(num_threads: usize)
         }
     }
 
+    // Remove all `Nones`, remove each channel pair from its
+    // `Option` container, and split the Vec into `num_threads` pieces.
     (
         split_vec(filter_vec(rqst_tx), num_threads, num_threads-1),
         split_vec(filter_vec(rqst_rx), num_threads, num_threads-1),
@@ -119,27 +126,27 @@ fn make_channels_ri(num_threads: usize)
 }
 
 fn make_channels_si(num_threads: usize)
-                    -> (Vec<spmc::Sender<bool>>,
-                        Vec<Vec<spmc::Receiver<bool>>>)
+                    -> (Vec<bc::Sender>,
+                        Vec<Vec<bc::Receiver>>)
 {
-    let mut rqst_tx = Vec::<spmc::Sender<bool>>::with_capacity(num_threads);
-    let mut rqst_rx = Vec::<spmc::Receiver<bool>>::with_capacity(num_threads);
+    let mut rqst_tx = Vec::<bc::Sender>::with_capacity(num_threads);
+    let mut rqst_rx = Vec::<bc::Receiver>::with_capacity(num_threads);
 
     // Create initial channels.
     #[allow(unused_variables)]
     for n in 0..num_threads {
-        let (tx, rx) = spmc::channel::<bool>();
+        let (tx, rx) = bc::make_boolchan();
         rqst_tx.push(tx);
         rqst_rx.push(rx);
     }
 
     // Clone Receivers N-2 times so there is one Receiver to give
     // to each of the OTHER workers.
-    let mut rqst_rx_tmp = Vec::<Vec<spmc::Receiver<bool>>>::with_capacity(num_threads);
+    let mut rqst_rx_tmp = Vec::<Vec<bc::Receiver>>::with_capacity(num_threads);
 
     #[allow(unused_variables)]
     for n in 0..num_threads {
-        let mut clones = Vec::<spmc::Receiver<bool>>::with_capacity(num_threads - 1);
+        let mut clones = Vec::<bc::Receiver>::with_capacity(num_threads - 1);
         let rx = rqst_rx.remove(0);
         
         for nn in 0..(num_threads-2) {
@@ -151,11 +158,11 @@ fn make_channels_si(num_threads: usize)
     }
 
     // Swap out the receivers so each worker has a receiver for every OTHER worker.
-    let mut rqst_rx = Vec::<Vec<spmc::Receiver<bool>>>::with_capacity(num_threads);
+    let mut rqst_rx = Vec::<Vec<bc::Receiver>>::with_capacity(num_threads);
 
     #[allow(unused_variables)]
     for n in 0..num_threads {
-        let mut recvs = Vec::<spmc::Receiver<bool>>::with_capacity(num_threads - 1);
+        let mut recvs = Vec::<bc::Receiver>::with_capacity(num_threads - 1);
 
         for nn in 0..num_threads {
             // Do not get a receiver for this worker.
@@ -173,56 +180,46 @@ fn make_channels_si(num_threads: usize)
 }
 
 fn make_channels_shared(num_threads: usize)
-                        -> (Vec<Vec<mpsc::Sender<usize>>>,
-                            Vec<Vec<mpsc::Receiver<usize>>>,
-                            Vec<Vec<mpsc::Sender<Task>>>,
-                            Vec<Vec<mpsc::Receiver<Task>>>)
+                        -> (Vec<Vec<tc::Sender>>,
+                            Vec<Vec<tc::Receiver>>)
 {
     let ntsq = num_threads * num_threads;
     
     // Model the channels as several NxN matrices.
-    let mut resp_tx = Vec::<Option<mpsc::Sender<usize>>>::with_capacity(ntsq);
-    let mut resp_rx = Vec::<Option<mpsc::Receiver<usize>>>::with_capacity(ntsq);
-    let mut jobs_tx = Vec::<Option<mpsc::Sender<Task>>>::with_capacity(ntsq);
-    let mut jobs_rx = Vec::<Option<mpsc::Receiver<Task>>>::with_capacity(ntsq);
+    let mut tasks_tx = Vec::<Option<tc::Sender>>::with_capacity(ntsq);
+    let mut tasks_rx = Vec::<Option<tc::Receiver>>::with_capacity(ntsq);
     
     for n in 0..ntsq {
         match is_same_thread(n, num_threads) {
             true => {
-                resp_tx.push(None);
-                resp_rx.push(None);
-                jobs_tx.push(None);
-                jobs_rx.push(None);
+                tasks_tx.push(None);
+                tasks_rx.push(None);
             },
             false => {
-                let (tx, rx) = mpsc::channel::<usize>();
-                resp_tx.push(Some(tx));
-                resp_rx.push(Some(rx));
-                let (tx, rx) = mpsc::channel::<Task>();
-                jobs_tx.push(Some(tx));
-                jobs_rx.push(Some(rx));
+                let (tx, rx) = tc::make_taskchan();
+                tasks_tx.push(Some(tx));
+                tasks_rx.push(Some(rx));
             },
         }
     }
 
     // Give one part of each channel to its corresponding thread.
-    // This is accomplished by transposing the `resp_tx` & `jobs_tx` 'matrices'.
+    // This is accomplished by transposing the `tasks_rx` 'matrices'.
     for n in 0..ntsq {
         if is_lower_left(n, num_threads) {
-            resp_tx.swap(n, transpose_n(n, num_threads));
-            jobs_rx.swap(n, transpose_n(n, num_threads));
+            tasks_rx.swap(n, transpose_n(n, num_threads));
         }
     }
 
-    // Remove all Nones, remove each channel pair from its
-    // Option container, and split the Vec into num_threads pieces.
+    // Remove all `Nones`, remove each channel pair from its
+    // `Option` container, and split the Vec into `num_threads` pieces.
     (
-        split_vec(filter_vec(resp_tx), num_threads, num_threads-1),
-        split_vec(filter_vec(resp_rx), num_threads, num_threads-1),
-        split_vec(filter_vec(jobs_tx), num_threads, num_threads-1),
-        split_vec(filter_vec(jobs_rx), num_threads, num_threads-1),
+        split_vec(filter_vec(tasks_tx), num_threads, num_threads-1),
+        split_vec(filter_vec(tasks_rx), num_threads, num_threads-1),
     )
 }
+
+// Helper functions shared between `make_channels_ri()` and `make_channels_shared`
 
 fn filter_vec<T>(v: Vec<Option<T>>) -> Vec<T> {
     v.into_iter().filter_map(|n| { n }).collect::<Vec<_>>()
@@ -263,7 +260,10 @@ fn transpose_n(n: usize, row_size: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::super::Initiated;
-    use super::{Data, Requests, make_channels, make_channels_ri, make_channels_si, make_channels_shared, split_vec};
+    // use super::super::task::{Task, FnBox};
+    use super::super::task::Data as TaskData;
+
+    use super::{Data, Channel, make_channels, make_channels_ri, make_channels_si, make_channels_shared, split_vec};
 
     static NT: usize = 4;
 
@@ -275,35 +275,24 @@ mod tests {
                            9, 10, 11];
         let (n, r) = (4, 3);
         let vec2 = split_vec(vec, 4, 3);
-        assert!(vec2.len() == n);
+        assert_eq!(vec2.len(), n);
         for vec3 in vec2 {
-            assert!(vec3.len() == r);
+            assert_eq!(vec3.len(), r);
         }
     }
 
     #[test]
     fn test_make_channels_shared() {
-        let (resp_tx, resp_rx,
-             jobs_tx, jobs_rx) = make_channels_shared(NT);
-        assert!(resp_tx.len() == NT);
-        assert!(resp_rx.len() == NT);
-        assert!(jobs_tx.len() == NT);
-        assert!(jobs_rx.len() == NT);
-
-        for v in resp_tx.iter() {
-            assert!(v.len() == NT-1);
-        }
-
-        for v in resp_rx.iter() {
-            assert!(v.len() == NT-1);
-        }
+        let (tasks_tx, tasks_rx) = make_channels_shared(NT);
+        assert_eq!(tasks_tx.len(), NT);
+        assert_eq!(tasks_rx.len(), NT);
         
-        for v in jobs_tx.iter() {
-            assert!(v.len() == NT-1);
+        for v in tasks_tx.iter() {
+            assert_eq!(v.len(), NT-1);
         }
 
-        for v in jobs_rx.iter() {
-            assert!(v.len() == NT-1);
+        for v in tasks_rx.iter() {
+            assert_eq!(v.len(), NT-1);
         }
     }
 
@@ -311,15 +300,15 @@ mod tests {
     fn test_make_channels_ri() {
         let (rqst_tx, rqst_rx) = make_channels_ri(NT);
 
-        assert!(rqst_tx.len() == NT);
-        assert!(rqst_rx.len() == NT);
+        assert_eq!(rqst_tx.len(), NT);
+        assert_eq!(rqst_rx.len(), NT);
 
         for v in rqst_tx.iter() {
-            assert!(v.len() == NT-1);
+            assert_eq!(v.len(), NT-1);
         }
 
         for v in rqst_rx.iter() {
-            assert!(v.len() == NT-1);
+            assert_eq!(v.len(), NT-1);
         }
     }
 
@@ -327,85 +316,98 @@ mod tests {
     fn test_make_channels_si() {
         let (rqst_tx, rqst_rx) = make_channels_si(NT);
 
-        assert!(rqst_tx.len() == NT);
-        assert!(rqst_rx.len() == NT);
+        assert_eq!(rqst_tx.len(), NT);
+        assert_eq!(rqst_rx.len(), NT);
 
         for v in rqst_rx.iter() {
-            assert!(v.len() == NT-1);
+            assert_eq!(v.len(), NT-1);
         }
     }
 
     #[test]
     fn test_make_ri() {
-        let data = make_channels(NT, Initiated::RECEIVER);
+        let data = make_channels(NT, Initiated::Receiver);
 
-        assert!(data.len() == NT);
+        assert_eq!(data.len(), NT);
 
         for datum in data.into_iter() {
-            assert!(datum.responses_send.len() == NT-1);
-            assert!(datum.responses_get.len() == NT-1);
-            assert!(datum.tasks_send.len() == NT-1);
-            assert!(datum.tasks_get.len() == NT-1);
-
-            match datum.requests {
-                Requests::Receiver {
-                    send, get,
+            match datum {
+                Data::Receiver {
+                    channels
                 } => {
-                    assert!(send.len() == NT-1);
-                    assert!(get.len() == NT-1);
+                    assert_eq!(channels.len(), NT-1);
+
+                    for chan in channels.into_iter() {
+                        match chan {
+                            Channel::Receiver { .. } => {},
+                            Channel::Sender { .. } => { assert!(false); },
+                        }
+                    }
                 },
-                Requests::Sender { .. } => {
-                    assert!(false);
-                }
-            }
+                Data::Sender {..} => { assert!(false); },
+            };
         }
     }
 
     #[test]
     fn test_make_si() {
-        let data = make_channels(NT, Initiated::SENDER);
+        let data = make_channels(NT, Initiated::Sender);
 
-        assert!(data.len() == NT);
+        assert_eq!(data.len(), NT);
 
         for datum in data.into_iter() {
-            assert!(datum.responses_send.len() == NT-1);
-            assert!(datum.responses_get.len() == NT-1);
-            assert!(datum.tasks_send.len() == NT-1);
-            assert!(datum.tasks_get.len() == NT-1);
-
-            match datum.requests {
-                Requests::Sender{
-                    get, ..
+            match datum {
+                Data::Sender {
+                    channels, ..
                 } => {
-                    assert!(get.len() == NT-1);
+                    assert_eq!(channels.len(), NT-1);
+
+                    for chan in channels.into_iter() {
+                        match chan {
+                            Channel::Sender { .. } => {},
+                            Channel::Receiver { .. } => { assert!(false); },
+                        }
+                    }
                 },
-                Requests::Receiver{ .. } => {
-                    assert!(false);
-                }
-            }
+                Data::Receiver {..} => { assert!(false); },
+            };
         }
     }
 
     macro_rules! tstcomm_reqs_ri {
         ($chan1:ident, $idx1:expr, $var:expr,
          $chan2:ident, $idx2:expr) => (
-            match $chan1.requests {
-                Requests::Receiver {
-                    ref send, ..
+            match $chan1 {
+                Data::Receiver {
+                    ref channels,
                 } => {
-                    send[$idx1].send($var).unwrap();
+                    match channels[$idx1] {
+                        Channel::Receiver {
+                            ref request_send, ..
+                        } => {
+                            request_send.send().unwrap();
+                        },
+                        _ => { assert!(false); },
+                    };
                 },
-                _ => { assert!(false); }
+                _ => { assert!(false); },
             };
-            
-            match $chan2.requests {
-                Requests::Receiver {
-                    ref get, ..
+
+            match $chan2 {
+                Data::Receiver {
+                    ref channels,
                 } => {
-                    let d = get[$idx2].recv().unwrap();
-                    assert!(d == $var);
+                    match channels[$idx2] {
+                        Channel::Receiver {
+                            ref request_get, ..
+                        } => {
+                            let d = request_get.receive();
+                            assert_eq!(d, $var);
+                        },
+                        _ => { assert!(false); },
+                    };
                 },
-                _ => { assert!(false); }
+                _ => { assert!(false); },
             };
         );
     }
@@ -413,48 +415,124 @@ mod tests {
     macro_rules! tstcomm_reqs_si {
         ($chan1:ident, $var:expr,
          $chan2:ident, $idx2:expr) => (
-            match $chan1.requests {
-                Requests::Sender {
-                    ref send, ..
+            match $chan1 {
+                Data::Sender {
+                    ref request_send, ..
                 } => {
-                    send.send($var).unwrap();
+                    request_send.send().unwrap();
                 },
-                _ => { assert!(false); }
+                _ => { assert!(false); },
             };
-            
-            match $chan2.requests {
-                Requests::Sender {
-                    ref get, ..
+
+            match $chan2 {
+                Data::Sender {
+                    ref channels, ..
                 } => {
-                    let d = get[$idx2].recv().unwrap();
-                    assert!(d == $var);
+                    match channels[$idx2] {
+                        Channel::Sender {
+                            ref request_get, ..
+                        } => {
+                            let d = request_get.receive();
+                            assert_eq!(d, $var);
+                        },
+                        _ => { assert!(false); },
+                    };
                 },
-                _ => { assert!(false); }
+                _ => { assert!(false); },
             };
         );
     }
 
-    macro_rules! tstcomm_resp {
+    macro_rules! tstcomm_tasks_ri {
         ($chan1:ident, $idx1:expr, $var:expr,
          $chan2:ident, $idx2:expr) => (
-            $chan1.responses_send[$idx1].send($var).unwrap();
-            let d = $chan2.responses_get[$idx2].recv().unwrap();
-            assert!(d == $var);
+            match $chan1 {
+                Data::Receiver {
+                    ref channels,
+                } => {
+                    match channels[$idx1] {
+                        Channel::Receiver {
+                            ref task_send, ..
+                        } => {
+                            task_send.send($var).unwrap();
+                        },
+                        _ => { assert!(false); },
+                    };
+                },
+                _ => { assert!(false); },
+            };
+
+            match $chan2 {
+                Data::Receiver {
+                    ref channels,
+                } => {
+                    match channels[$idx2] {
+                        Channel::Receiver {
+                            ref task_get, ..
+                        } => {
+                            let d = task_get.try_receive().unwrap();
+                            if let TaskData::OneTask(t) = d {
+                                t.call_box();
+                            }
+                            else {
+                                assert!(false);
+                            }
+                        },
+                        _ => { assert!(false); },
+                    };
+                },
+                _ => { assert!(false); },
+            };
         );
     }
 
-    macro_rules! tstcomm_tasks {
+    macro_rules! tstcomm_tasks_si {
         ($chan1:ident, $idx1:expr, $var:expr,
          $chan2:ident, $idx2:expr) => (
-            $chan1.tasks_send[$idx1].send($var).unwrap();
-            let d = $chan2.tasks_get[$idx2].recv().unwrap();
-            d.call_box();
+            match $chan1 {
+                Data::Sender {
+                    ref channels, ..
+                } => {
+                    match channels[$idx1] {
+                        Channel::Sender {
+                            ref task_send, ..
+                        } => {
+                            task_send.send($var).unwrap();
+                        },
+                        _ => { assert!(false); },
+                    };
+                },
+                _ => { assert!(false); },
+            };
+
+            match $chan2 {
+                Data::Sender{
+                    ref channels, ..
+                } => {
+                    match channels[$idx2] {
+                        Channel::Sender {
+                            ref task_get, ..
+                        } => {
+                            let d = task_get.try_receive().unwrap();
+                            if let TaskData::OneTask(t) = d {
+                                t.call_box();
+                            }
+                            else {
+                                assert!(false);
+                            }
+                        },
+                        _ => { assert!(false); },
+                    };
+                },
+                _ => { assert!(false); },
+            };
         );
     }
 
     #[test]
     fn test_requests_ri() {
-        let mut data = make_channels(3, Initiated::RECEIVER);
+        let mut data = make_channels(3, Initiated::Receiver);
+        
         let chan3 = data.pop().unwrap();
         let chan2 = data.pop().unwrap();
         let chan1 = data.pop().unwrap();
@@ -469,7 +547,7 @@ mod tests {
 
     #[test]
     fn test_requests_si() {
-        let mut data = make_channels(3, Initiated::SENDER);
+        let mut data = make_channels(3, Initiated::Sender);
         let chan3 = data.pop().unwrap();
         let chan2 = data.pop().unwrap();
         let chan1 = data.pop().unwrap();
@@ -483,218 +561,36 @@ mod tests {
     }
 
     #[test]
-    fn test_responses() {
-        let mut data = make_channels(3, Initiated::RECEIVER);
+    fn test_tasks_ri() {
+        use self::TaskData::OneTask as OT;
+        
+        let mut data = make_channels(3, Initiated::Receiver);
         let chan3 = data.pop().unwrap();
         let chan2 = data.pop().unwrap();
         let chan1 = data.pop().unwrap();
 
-        tstcomm_resp!(chan1, 0, 1, chan2, 0);
-        tstcomm_resp!(chan1, 1, 2, chan3, 0);
-        tstcomm_resp!(chan2, 0, 3, chan1, 0);
-        tstcomm_resp!(chan2, 1, 4, chan3, 1);
-        tstcomm_resp!(chan3, 0, 5, chan1, 1);
-        tstcomm_resp!(chan3, 1, 6, chan2, 1);
+        tstcomm_tasks_ri!(chan1, 0, OT(Box::new(|| {println!("Hello 1")})), chan2, 0);
+        tstcomm_tasks_ri!(chan1, 1, OT(Box::new(|| {println!("Hello 2")})), chan3, 0);
+        tstcomm_tasks_ri!(chan2, 0, OT(Box::new(|| {println!("Hello 3")})), chan1, 0);
+        tstcomm_tasks_ri!(chan2, 1, OT(Box::new(|| {println!("Hello 4")})), chan3, 1);
+        tstcomm_tasks_ri!(chan3, 0, OT(Box::new(|| {println!("Hello 5")})), chan1, 1);
+        tstcomm_tasks_ri!(chan3, 1, OT(Box::new(|| {println!("Hello 6")})), chan2, 1);
     }
 
     #[test]
-    fn test_tasks() {
-        let mut data = make_channels(3, Initiated::RECEIVER);
+    fn test_tasks_si() {
+        use self::TaskData::OneTask as OT;
+
+        let mut data = make_channels(3, Initiated::Sender);
         let chan3 = data.pop().unwrap();
         let chan2 = data.pop().unwrap();
         let chan1 = data.pop().unwrap();
 
-        tstcomm_tasks!(chan1, 0, Box::new(|| {println!("Hello 1")}), chan2, 0);
-        tstcomm_tasks!(chan1, 1, Box::new(|| {println!("Hello 2")}), chan3, 0);
-        tstcomm_tasks!(chan2, 0, Box::new(|| {println!("Hello 3")}), chan1, 0);
-        tstcomm_tasks!(chan2, 1, Box::new(|| {println!("Hello 4")}), chan3, 1);
-        tstcomm_tasks!(chan3, 0, Box::new(|| {println!("Hello 5")}), chan1, 1);
-        tstcomm_tasks!(chan3, 1, Box::new(|| {println!("Hello 6")}), chan2, 1);
+        tstcomm_tasks_si!(chan1, 0, OT(Box::new(|| {println!("Hello 1")})), chan2, 0);
+        tstcomm_tasks_si!(chan1, 1, OT(Box::new(|| {println!("Hello 2")})), chan3, 0);
+        tstcomm_tasks_si!(chan2, 0, OT(Box::new(|| {println!("Hello 3")})), chan1, 0);
+        tstcomm_tasks_si!(chan2, 1, OT(Box::new(|| {println!("Hello 4")})), chan3, 1);
+        tstcomm_tasks_si!(chan3, 0, OT(Box::new(|| {println!("Hello 5")})), chan1, 1);
+        tstcomm_tasks_si!(chan3, 1, OT(Box::new(|| {println!("Hello 6")})), chan2, 1);
     }
-
-    // #[test]
-    // fn test_responses_si() {
-    //     let mut data = make_channels(3, Initiated::SENDER);
-    //     let chan3 = data.pop().unwrap();
-    //     let chan2 = data.pop().unwrap();
-    //     let chan1 = data.pop().unwrap();
-    //     use self::Requests::Sender;
-
-    //     tstcomm!(Sender, chan1, responses_send, 0, 1, chan2, responses_get, 0);
-    //     tstcomm!(Sender, chan1, responses_send, 1, 2, chan3, responses_get, 0);
-    //     tstcomm!(Sender, chan2, responses_send, 0, 3, chan1, responses_get, 0);
-    //     tstcomm!(Sender, chan2, responses_send, 1, 4, chan3, responses_get, 1);
-    //     tstcomm!(Sender, chan3, responses_send, 0, 5, chan1, responses_get, 1);
-    //     tstcomm!(Sender, chan3, responses_send, 1, 6, chan2, responses_get, 1);
-    // }
-
-    // #[test]
-    // fn test_tasks_si() {
-    //     let mut data = make_channels(3, Initiated::SENDER);
-    //     let chan3 = data.pop().unwrap();
-    //     let chan2 = data.pop().unwrap();
-    //     let chan1 = data.pop().unwrap();
-    //     use self::Requests::Sender;
-
-    //     tstcomm_tasks!(Sender, chan1, tasks_send, 0, Box::new(|| {println!("Hello 1")}), chan2, tasks_get, 0);
-    //     tstcomm_tasks!(Sender, chan1, tasks_send, 1, Box::new(|| {println!("Hello 2")}), chan3, tasks_get, 0);
-    //     tstcomm_tasks!(Sender, chan2, tasks_send, 0, Box::new(|| {println!("Hello 3")}), chan1, tasks_get, 0);
-    //     tstcomm_tasks!(Sender, chan2, tasks_send, 1, Box::new(|| {println!("Hello 4")}), chan3, tasks_get, 1);
-    //     tstcomm_tasks!(Sender, chan3, tasks_send, 0, Box::new(|| {println!("Hello 5")}), chan1, tasks_get, 1);
-    //     tstcomm_tasks!(Sender, chan3, tasks_send, 1, Box::new(|| {println!("Hello 6")}), chan2, tasks_get, 1);
-    // }
-
-    // #[test]
-    // fn test_chans_ri() {
-    //     let mut data = make_channels(2, Initiated::RECEIVER);
-    //     let chan2 = data.pop().unwrap();
-    //     let chan1 = data.pop().unwrap();
-
-    //     match chan1 {
-    //         Data::Receiver {
-    //             ref requests_send, ..
-    //         } => {
-    //             requests_send[0].send(true).unwrap();
-    //         },
-    //         Data::Sender { .. } => { assert!(false); },
-    //     };
-
-    //     match chan2 {
-    //         Data::Receiver {
-    //             ref requests_get, ref responses_send, ref tasks_send, ..
-    //         } => {
-    //             let req = requests_get[0].recv().unwrap();
-    //             assert!(req == true);
-    //             responses_send[0].send(1).unwrap();
-    //             tasks_send[0].send(Box::new(|| {
-    //                 println!("Hello!");
-    //             }));
-    //         },
-    //         Data::Sender { .. } => { assert!(false); },
-    //     };
-
-    //     match chan1 {
-    //         Data::Receiver {
-    //             ref responses_get, ref tasks_get, ..
-    //         } => {
-    //             let res1 = responses_get[0].recv().unwrap();
-    //             assert!(res1 == 1);
-    //             let res2 = tasks_get[0].recv().unwrap();
-    //             res2.call_box();
-    //         },
-    //         Data::Sender { .. } => { assert!(false); },
-    //     };
-
-    //     match chan2 {
-    //         Data::Receiver {
-    //             ref requests_send, ..
-    //         } => {
-    //             requests_send[0].send(true).unwrap();
-    //         },
-    //         Data::Sender { .. } => { assert!(false); },
-    //     };
-
-    //     match chan1 {
-    //         Data::Receiver {
-    //             ref requests_get, ref responses_send, ref tasks_send, ..
-    //         } => {
-    //             let req = requests_get[0].recv().unwrap();
-    //             assert!(req == true);
-    //             responses_send[0].send(1).unwrap();
-    //             tasks_send[0].send(Box::new(|| {
-    //                 println!("World!");
-    //             }));
-    //         },
-    //         Data::Sender { .. } => { assert!(false); },
-    //     };
-
-    //     match chan2 {
-    //         Data::Receiver {
-    //             ref responses_get, ref tasks_get, ..
-    //         } => {
-    //             let res1 = responses_get[0].recv().unwrap();
-    //             assert!(res1 == 1);
-    //             let res2 = tasks_get[0].recv().unwrap();
-    //             res2.call_box();
-    //         },
-    //         Data::Sender { .. } => { assert!(false); },
-    //     };
-    // }
-
-    // #[test]
-    // fn test_chans_si() {
-    //     let mut data = make_channels(2, Initiated::SENDER);
-    //     let chan2 = data.pop().unwrap();
-    //     let chan1 = data.pop().unwrap();
-
-    //     match chan1 {
-    //         Data::Sender {
-    //             ref requests_send, ..
-    //         } => {
-    //             requests_send.send(true).unwrap();
-    //         },
-    //         Data::Receiver { .. } => { assert!(false); },
-    //     };
-
-    //     match chan2 {
-    //         Data::Sender {
-    //             ref requests_get, ref responses_send, ref tasks_send, ..
-    //         } => {
-    //             let req = requests_get[0].recv().unwrap();
-    //             assert!(req == true);
-    //             responses_send[0].send(1).unwrap();
-    //             tasks_send[0].send(Box::new(|| {
-    //                 println!("Hello!");
-    //             })).unwrap();
-    //         },
-    //         Data::Receiver { .. } => { assert!(false); },
-    //     };
-
-    //     match chan1 {
-    //         Data::Sender {
-    //             ref responses_get, ref tasks_get, ..
-    //         } => {
-    //             let res1 = responses_get[0].recv().unwrap();
-    //             assert!(res1 == 1);
-    //             let res2 = tasks_get[0].recv().unwrap();
-    //             res2.call_box();
-    //         },
-    //         Data::Receiver { .. } => { assert!(false); },
-    //     };
-
-    //     match chan2 {
-    //         Data::Sender {
-    //             ref requests_send, ..
-    //         } => {
-    //             requests_send.send(true).unwrap();
-    //         },
-    //         Data::Receiver { .. } => { assert!(false); },
-    //     };
-
-    //     match chan1 {
-    //         Data::Sender {
-    //             ref requests_get, ref responses_send, ref tasks_send, ..
-    //         } => {
-    //             let req = requests_get[0].recv().unwrap();
-    //             assert!(req == true);
-    //             responses_send[0].send(1).unwrap();
-    //             tasks_send[0].send(Box::new(|| {
-    //                 println!("World!");
-    //             })).unwrap();
-    //         },
-    //         Data::Receiver { .. } => { assert!(false); },
-    //     };
-
-    //     match chan2 {
-    //         Data::Sender {
-    //             ref responses_get, ref tasks_get, ..
-    //         } => {
-    //             let res1 = responses_get[0].recv().unwrap();
-    //             assert!(res1 == 1);
-    //             let res2 = tasks_get[0].recv().unwrap();
-    //             res2.call_box();
-    //         },
-    //         Data::Receiver { .. } => { assert!(false); },
-    //     };
-    // }
 }
