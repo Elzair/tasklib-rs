@@ -7,7 +7,7 @@ use std::time::Duration;
 
 pub mod task;
 mod worker;
-// pub mod pool;
+pub mod pool;
 mod channel;
 
 #[derive(Clone, Copy)]
@@ -29,8 +29,8 @@ pub enum ReceiverWaitStrategy {
 }
 
 pub use task::Task;
-// pub use pool::ThreadPool;
-pub use worker::{WorkerRI, WorkerSI};
+pub use pool::{PoolRI, PoolSI};
+// pub use worker::{WorkerRI, WorkerSI};
 
 #[cfg(test)]
 mod tests {
