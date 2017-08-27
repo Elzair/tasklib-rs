@@ -8,7 +8,7 @@ use rand::{Rng, SeedableRng};
 
 use super::{ShareStrategy, ReceiverWaitStrategy};
 use super::channel::boolchan as bc;
-use super::channel::{DataRI, DataSI};
+use super::channel::{ChannelRI, ChannelSI, DataRI, DataSI};
 use super::task::Task;
 use super::task::Data as TaskData;
 
@@ -102,12 +102,13 @@ impl WorkerRI {
         }
     }
 
-    fn try_get_tasks(&self, index: usize) -> bool {
+    // fn try_get_tasks(&self, index: usize) -> bool {
+    fn try_get_tasks(&self, channel: &ChannelRI) -> bool {
         let start_time = Instant::now();
 
         loop {
-            if let Ok(task_data) = self.channel_data.channels[index]
-                .task_get.try_receive() {
+            // if let Ok(task_data) = self.channel_data.channels[index].task_get.try_receive() {
+            if let Ok(task_data) = channel.task_get.try_receive() {
                 self.add_tasks(task_data);
                 return true;
             }
@@ -134,23 +135,23 @@ impl WorkerRI {
 
         while !got_tasks {
             let rand_idx = self.rand_index();
+            let channel = &self.channel_data.channels[rand_idx];
 
             // Send request.
-            self.channel_data.channels[rand_idx].request_send.send().unwrap();
+            channel.request_send.send().unwrap();
             
             // Wait for either tasks or timeout.
-            match self.try_get_tasks(rand_idx) {
+            // match self.try_get_tasks(rand_idx) {
+            match self.try_get_tasks(channel) {
                 true => {
                     got_tasks = true;
                 },
                 false => {
                     // Try to unsend request.
-                    match self.channel_data.channels[rand_idx]
-                        .request_send.try_unsend() {
+                    match channel.request_send.try_unsend() {
                             // If we are too late, just block until we get all the tasks.
                             Err(bc::TryUnsendError::TooLate) => {
-                                self.add_tasks(self.channel_data.channels[rand_idx]
-                                               .task_get.receive());
+                                self.add_tasks(channel.task_get.receive());
                             },
                             _ => {},
                         }
@@ -170,6 +171,7 @@ impl WorkerRI {
         for idx in 0..len {
             // This makes sure the search wraps around to earlier channels.
             let index = (start + idx) % len;
+            let channel = &self.channel_data.channels[index];
 
             // Do not trying sharing tasks if we do not have any.
             if self.tasks.borrow().is_empty() {
@@ -177,17 +179,20 @@ impl WorkerRI {
             }
             
             // Share tasks with any thread that requests them.
-            if self.channel_data.channels[index]
-                .request_get.receive() == true {
-                    self.share(index);
+            // if self.channel_data.channels[index]
+            //     .request_get.receive() == true {
+            if channel.request_get.receive() == true {
+                    // self.share(index);
+                self.share(channel);
             }
         }
     }
 
-    fn share(&self, idx: usize) {
+    // fn share(&self, idx: usize) {
+    fn share(&self, channel: &ChannelRI) {
         match self.share_strategy {
             ShareStrategy::One => {
-                self.channel_data.channels[idx].task_send.send(
+                channel.task_send.send(
                     TaskData::OneTask(self.tasks.borrow_mut().pop_front()
                                       .unwrap())
                 ).unwrap();
@@ -196,7 +201,7 @@ impl WorkerRI {
                 let half_len = self.tasks.borrow().len() / 2;
 
                 if half_len > 0 {
-                    self.channel_data.channels[idx].task_send.send(
+                    channel.task_send.send(
                         TaskData::ManyTasks(self.tasks.borrow_mut()
                                             .split_off(half_len))
                     ).unwrap();
@@ -336,6 +341,7 @@ impl WorkerSI {
         for idx in 0..len {
             // This makes sure the search wraps around to earlier channels.
             let index = (start + idx) % len;
+            let channel = &self.channel_data.channels[index];
 
             // Do not trying sharing tasks if we do not have any.
             if self.tasks.borrow().is_empty() {
@@ -343,17 +349,20 @@ impl WorkerSI {
             }
             
             // Share tasks with any thread that requests them.
-            if self.channel_data.channels[index]
-                .request_get.receive() == true {
-                    self.share(index);
+            // if self.channel_data.channels[index]
+            //     .request_get.receive() == true {
+            if channel.request_get.receive() == true {
+                    // self.share(index);
+                self.share(channel);
             }
         }
     }
 
-    fn share(&self, index: usize) {
+    // fn share(&self, idx: usize) {
+    fn share(&self, channel: &ChannelSI) {
         match self.share_strategy {
             ShareStrategy::One => {
-                self.channel_data.channels[index].task_send.send(
+                channel.task_send.send(
                     TaskData::OneTask(self.tasks.borrow_mut().pop_front()
                                       .unwrap())
                 ).unwrap();
@@ -362,7 +371,7 @@ impl WorkerSI {
                 let half_len = self.tasks.borrow().len() / 2;
 
                 if half_len > 0 {
-                    self.channel_data.channels[index].task_send.send(
+                    channel.task_send.send(
                         TaskData::ManyTasks(self.tasks.borrow_mut()
                                             .split_off(half_len))
                     ).unwrap();
@@ -380,6 +389,8 @@ impl WorkerSI {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     
     use super::{ConfigRI, ConfigSI, WorkerRI, WorkerSI};
@@ -478,4 +489,50 @@ mod tests {
         assert_eq!(worker2.tasks.borrow_mut().len(), 2);
     }
 
+    #[test]
+    fn test_worker_ri_run_once_execute_task() {
+        let (worker1, _) = helper_ri(ShareStrategy::One, None);
+
+        let var = Arc::new(AtomicUsize::new(0));
+        let var1 = var.clone();
+
+        worker1.add_tasks(TaskData::OneTask(Box::new(move || {
+            var1.fetch_add(1, Ordering::SeqCst);
+        })));
+
+        worker1.run_once();
+
+        assert_eq!(var.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_worker_si_run_once_execute_task() {
+        let (worker1, _) = helper_si(ShareStrategy::One);
+
+        let var = Arc::new(AtomicUsize::new(0));
+        let var1 = var.clone();
+
+        worker1.add_tasks(TaskData::OneTask(Box::new(move || {
+            var1.fetch_add(1, Ordering::SeqCst);
+        })));
+
+        worker1.run_once();
+
+        assert_eq!(var.load(Ordering::SeqCst), 1);
+    }
+
+    // #[test]
+    // fn test_worker_ri_addtask() {
+    //     let (worker1, worker2) = helper_ri(ShareStrategy::One, None);
+
+    //     let res = worker1.add_tasks(TaskData::OneTask(Box::new(|| { println!("Hello World!");})));
+    //     assert_eq!(res, true);
+    //     assert_eq!(worker1.tasks.borrow_mut().len(), 1);
+
+    //     let mut vd = VecDeque::new();
+    //     vd.push_back(Box::new(|| { println!("Hello World!"); }) as Task);
+    //     vd.push_back(Box::new(|| { println!("Hello Again!"); }) as Task);
+    //     worker2.add_tasks(TaskData::ManyTasks(vd));
+    //     assert_eq!(worker2.tasks.borrow_mut().len(), 2);
+    // }
 }
