@@ -379,12 +379,14 @@ impl WorkerSI {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
     use std::time::Duration;
     
     use super::{ConfigRI, ConfigSI, WorkerRI, WorkerSI};
     use super::super::{ShareStrategy, ReceiverWaitStrategy};
     use super::super::channel::{make_receiver_initiated_channels, make_sender_initiated_channels};
     use super::super::task::Data as TaskData;
+    use super::super::task::Task;
 
     fn helper_ri(share: ShareStrategy,
                  timeout: Option<Duration>)
@@ -449,20 +451,31 @@ mod tests {
 
     #[test]
     fn test_worker_ri_addtask() {
-        let (worker, _) = helper_ri(ShareStrategy::One, None);
+        let (worker1, worker2) = helper_ri(ShareStrategy::One, None);
 
-        worker.add_tasks(TaskData::OneTask(Box::new(|| { println!("Hello World!");})));
+        let res = worker1.add_tasks(TaskData::OneTask(Box::new(|| { println!("Hello World!");})));
+        assert_eq!(res, true);
+        assert_eq!(worker1.tasks.borrow_mut().len(), 1);
 
-        assert!(worker.tasks.borrow_mut().len() == 1);
+        let mut vd = VecDeque::new();
+        vd.push_back(Box::new(|| { println!("Hello World!"); }) as Task);
+        vd.push_back(Box::new(|| { println!("Hello Again!"); }) as Task);
+        worker2.add_tasks(TaskData::ManyTasks(vd));
+        assert_eq!(worker2.tasks.borrow_mut().len(), 2);
     }
 
     #[test]
     fn test_worker_si_addtask() {
-        let (worker, _) = helper_si(ShareStrategy::One);
+        let (worker1, worker2) = helper_si(ShareStrategy::One);
 
-        worker.add_tasks(TaskData::OneTask(Box::new(|| { println!("Hello World!");})));
+        worker1.add_tasks(TaskData::OneTask(Box::new(|| { println!("Hello World!");})));
+        assert_eq!(worker1.tasks.borrow_mut().len(), 1);
 
-        assert!(worker.tasks.borrow_mut().len() == 1);
+        let mut vd = VecDeque::new();
+        vd.push_back(Box::new(|| { println!("Hello World!"); }) as Task);
+        vd.push_back(Box::new(|| { println!("Hello Again!"); }) as Task);
+        worker2.add_tasks(TaskData::ManyTasks(vd));
+        assert_eq!(worker2.tasks.borrow_mut().len(), 2);
     }
 
 }
