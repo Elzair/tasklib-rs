@@ -56,24 +56,6 @@ impl WorkerRI {
             channel_data,
         } = config;
 
-        // // Generate the seed of the worker's RNG.
-        // let mut tmp_rng = rand::thread_rng();
-        // let mut seed: [u32; 4] = [0, 0, 0, 0];
-        // let mut good_seed = false;
-
-        // while good_seed == false {
-        //     seed[0] = tmp_rng.gen::<u32>();
-        //     seed[1] = tmp_rng.gen::<u32>();
-        //     seed[2] = tmp_rng.gen::<u32>();
-        //     seed[3] = tmp_rng.gen::<u32>();
-
-        //     // `rand::XorShiftRng` will panic if the seed is all zeroes.
-        //     // Ensure that does not happen.
-        //     if !(seed[0] == 0 && seed[1] == 0 && seed[2] == 0 && seed[3] == 0) {
-        //         good_seed = true;
-        //     }
-        // }
-
         WorkerRI {
             index: index,
             exit_flag: exit_flag,
@@ -81,7 +63,6 @@ impl WorkerRI {
             run_all_tasks_before_exit: run_all_tasks_before_exit,
             share_strategy: share_strategy,
             wait_strategy: wait_strategy,
-            // rng: RefCell::new(rand::XorShiftRng::from_seed(seed)),
             rng: RefCell::new(rand::XorShiftRng::from_seed(rand_seed())),
             receiver_timeout: receiver_timeout,
             channel_timeout: channel_timeout,
@@ -242,7 +223,7 @@ impl WorkerRI {
     }
 
     fn rand_index(&self) -> usize {
-        (self.rng.borrow_mut().next_u32() as usize)
+        self.rng.borrow_mut().gen::<usize>()
             % self.channel_data.channels.len()
     }
 }
@@ -293,7 +274,6 @@ impl WorkerSI {
             run_all_tasks_before_exit: run_all_tasks_before_exit,
             share_strategy: share_strategy,
             wait_strategy: wait_strategy,
-            // rng: RefCell::new(rand::XorShiftRng::from_seed(seed)),
             rng: RefCell::new(rand::XorShiftRng::from_seed(rand_seed())),
             receiver_timeout: receiver_timeout,
             tasks: RefCell::new(VecDeque::with_capacity(task_capacity)),
@@ -409,7 +389,6 @@ impl WorkerSI {
         }
     }
 
-    // fn share(&self, idx: usize) {
     fn share(&self, channel: &ChannelSI) {
         match self.share_strategy {
             ShareStrategy::One => {
@@ -432,7 +411,7 @@ impl WorkerSI {
     }
 
     fn rand_index(&self) -> usize {
-        (self.rng.borrow_mut().next_u32() as usize)
+        self.rng.borrow_mut().gen::<usize>()
             % self.channel_data.channels.len()
     }
 }
