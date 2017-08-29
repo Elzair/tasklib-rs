@@ -1,5 +1,4 @@
 
-extern crate spmc;
 extern crate itertools;
 extern crate rand;
 
