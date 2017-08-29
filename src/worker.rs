@@ -1,5 +1,7 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::sync::{Arc, Barrier, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -14,6 +16,9 @@ use super::task::Data as TaskData;
 
 pub struct ConfigRI {
     pub index: usize,
+    pub exit_flag: Arc<AtomicBool>,
+    pub exit_barrier: Arc<Barrier>,
+    pub run_all_tasks_before_exit: bool,
     pub task_capacity: usize,
     pub share_strategy: ShareStrategy,
     pub wait_strategy: ReceiverWaitStrategy,
@@ -24,6 +29,9 @@ pub struct ConfigRI {
 
 pub struct WorkerRI {
     pub index: usize,
+    pub exit_flag: Arc<AtomicBool>,
+    exit_barrier: Arc<Barrier>,
+    run_all_tasks_before_exit: bool,
     share_strategy: ShareStrategy,
     wait_strategy: ReceiverWaitStrategy,
     rng: RefCell<rand::XorShiftRng>,
@@ -35,38 +43,46 @@ pub struct WorkerRI {
 
 impl WorkerRI {
     pub fn new(config: ConfigRI) -> WorkerRI {
-        let ConfigRI { index,
-                       task_capacity,
-                       share_strategy,
-                       wait_strategy,
-                       receiver_timeout,
-                       channel_timeout,
-                       channel_data,
+        let ConfigRI {
+            index,
+            exit_flag,
+            exit_barrier,
+            run_all_tasks_before_exit,
+            task_capacity,
+            share_strategy,
+            wait_strategy,
+            receiver_timeout,
+            channel_timeout,
+            channel_data,
         } = config;
 
-        // Generate the seed of the worker's RNG.
-        let mut tmp_rng = rand::thread_rng();
-        let mut seed: [u32; 4] = [0, 0, 0, 0];
-        let mut good_seed = false;
+        // // Generate the seed of the worker's RNG.
+        // let mut tmp_rng = rand::thread_rng();
+        // let mut seed: [u32; 4] = [0, 0, 0, 0];
+        // let mut good_seed = false;
 
-        while good_seed == false {
-            seed[0] = tmp_rng.gen::<u32>();
-            seed[1] = tmp_rng.gen::<u32>();
-            seed[2] = tmp_rng.gen::<u32>();
-            seed[3] = tmp_rng.gen::<u32>();
+        // while good_seed == false {
+        //     seed[0] = tmp_rng.gen::<u32>();
+        //     seed[1] = tmp_rng.gen::<u32>();
+        //     seed[2] = tmp_rng.gen::<u32>();
+        //     seed[3] = tmp_rng.gen::<u32>();
 
-            // `rand::XorShiftRng` will panic if the seed is all zeroes.
-            // Ensure that does not happen.
-            if !(seed[0] == 0 && seed[1] == 0 && seed[2] == 0 && seed[3] == 0) {
-                good_seed = true;
-            }
-        }
+        //     // `rand::XorShiftRng` will panic if the seed is all zeroes.
+        //     // Ensure that does not happen.
+        //     if !(seed[0] == 0 && seed[1] == 0 && seed[2] == 0 && seed[3] == 0) {
+        //         good_seed = true;
+        //     }
+        // }
 
         WorkerRI {
             index: index,
+            exit_flag: exit_flag,
+            exit_barrier: exit_barrier,
+            run_all_tasks_before_exit: run_all_tasks_before_exit,
             share_strategy: share_strategy,
             wait_strategy: wait_strategy,
-            rng: RefCell::new(rand::XorShiftRng::from_seed(seed)),
+            // rng: RefCell::new(rand::XorShiftRng::from_seed(seed)),
+            rng: RefCell::new(rand::XorShiftRng::from_seed(rand_seed())),
             receiver_timeout: receiver_timeout,
             channel_timeout: channel_timeout,
             tasks: RefCell::new(VecDeque::with_capacity(task_capacity)),
@@ -75,9 +91,24 @@ impl WorkerRI {
     }
 
     pub fn run(&self) {
-        loop {
+        while !self.exit_flag.load(Ordering::SeqCst) {
             self.run_once();
         }
+
+        // Run any remaining tasks if instructed to do so.
+        if self.run_all_tasks_before_exit {
+            loop {
+                let mut is_empty = !self.tasks.borrow().is_empty();
+
+                while !is_empty {
+                    self.tasks.borrow_mut().pop_front().unwrap().call_box();
+                    is_empty = self.tasks.borrow().is_empty();
+                }
+            }
+        }
+
+        // Wait on all other workers to stop running before dropping everything.
+        self.exit_barrier.wait();
     }
 
     #[inline]
@@ -218,6 +249,9 @@ impl WorkerRI {
 
 pub struct ConfigSI {
     pub index: usize,
+    pub exit_flag: Arc<AtomicBool>,
+    pub exit_barrier: Arc<Barrier>,
+    pub run_all_tasks_before_exit: bool,
     pub task_capacity: usize,
     pub share_strategy: ShareStrategy,
     pub wait_strategy: ReceiverWaitStrategy,
@@ -227,6 +261,9 @@ pub struct ConfigSI {
 
 pub struct WorkerSI {
     pub index: usize,
+    exit_flag: Arc<AtomicBool>,
+    exit_barrier: Arc<Barrier>,
+    run_all_tasks_before_exit: bool,
     share_strategy: ShareStrategy,
     wait_strategy: ReceiverWaitStrategy,
     rng: RefCell<rand::XorShiftRng>,
@@ -237,37 +274,27 @@ pub struct WorkerSI {
 
 impl WorkerSI {
     pub fn new(config: ConfigSI) -> WorkerSI {
-        let ConfigSI { index,
-                       task_capacity,
-                       share_strategy,
-                       wait_strategy,
-                       receiver_timeout,
-                       channel_data,
+        let ConfigSI {
+            index,
+            exit_flag,
+            exit_barrier,
+            run_all_tasks_before_exit,
+            task_capacity,
+            share_strategy,
+            wait_strategy,
+            receiver_timeout,
+            channel_data,
         } = config;
-
-        // Generate the seed of the worker's RNG.
-        let mut tmp_rng = rand::thread_rng();
-        let mut seed: [u32; 4] = [0, 0, 0, 0];
-        let mut good_seed = false;
-
-        while good_seed == false {
-            seed[0] = tmp_rng.gen::<u32>();
-            seed[1] = tmp_rng.gen::<u32>();
-            seed[2] = tmp_rng.gen::<u32>();
-            seed[3] = tmp_rng.gen::<u32>();
-
-            // `rand::XorShiftRng` will panic if the seed is all zeroes.
-            // Ensure that does not happen.
-            if !(seed[0] == 0 && seed[1] == 0 && seed[2] == 0 && seed[3] == 0) {
-                good_seed = true;
-            }
-        }
 
         WorkerSI {
             index: index,
+            exit_flag: exit_flag,
+            exit_barrier: exit_barrier,
+            run_all_tasks_before_exit: run_all_tasks_before_exit,
             share_strategy: share_strategy,
             wait_strategy: wait_strategy,
-            rng: RefCell::new(rand::XorShiftRng::from_seed(seed)),
+            // rng: RefCell::new(rand::XorShiftRng::from_seed(seed)),
+            rng: RefCell::new(rand::XorShiftRng::from_seed(rand_seed())),
             receiver_timeout: receiver_timeout,
             tasks: RefCell::new(VecDeque::with_capacity(task_capacity)),
             channel_data: channel_data,
@@ -275,9 +302,24 @@ impl WorkerSI {
     }
 
     pub fn run(&self) {
-        loop {
+        while !self.exit_flag.load(Ordering::SeqCst) {
             self.run_once();
         }
+
+        // Run any remaining tasks if instructed to do so.
+        if self.run_all_tasks_before_exit {
+            loop {
+                let mut is_empty = !self.tasks.borrow().is_empty();
+
+                while !is_empty {
+                    self.tasks.borrow_mut().pop_front().unwrap().call_box();
+                    is_empty = self.tasks.borrow().is_empty();
+                }
+            }
+        }
+
+        // Wait on all other workers to stop running before dropping everything.
+        self.exit_barrier.wait();
     }
 
     #[inline]
@@ -398,8 +440,8 @@ impl WorkerSI {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::thread;
     use std::time::Duration;
     
@@ -414,9 +456,14 @@ mod tests {
                  channel_timeout: Duration)
                  -> (WorkerRI, WorkerRI) {
         let mut channels = make_receiver_initiated_channels(2);
+        let exit_flag = Arc::new(AtomicBool::new(false));
+        let exit_barrier = Arc::new(Barrier::new(2));
         
         let worker1 = WorkerRI::new(ConfigRI {
             index: 0,
+            exit_flag: exit_flag.clone(),
+            exit_barrier: exit_barrier.clone(),
+            run_all_tasks_before_exit: true,
             task_capacity: 16,
             share_strategy: share,
             wait_strategy: ReceiverWaitStrategy::Yield,
@@ -427,6 +474,9 @@ mod tests {
         
         let worker2 = WorkerRI::new(ConfigRI {
             index: 1,
+            exit_flag: exit_flag.clone(),
+            exit_barrier: exit_barrier.clone(),
+            run_all_tasks_before_exit: true,
             task_capacity: 16,
             share_strategy: share,
             wait_strategy: ReceiverWaitStrategy::Yield,
@@ -442,9 +492,14 @@ mod tests {
                  receiver_timeout: Duration)
                  -> (WorkerSI, WorkerSI) {
         let mut channels = make_sender_initiated_channels(2);
+        let exit_flag = Arc::new(AtomicBool::new(false));
+        let exit_barrier = Arc::new(Barrier::new(2));
         
         let worker1 = WorkerSI::new(ConfigSI {
             index: 0,
+            exit_flag: exit_flag.clone(),
+            exit_barrier: exit_barrier.clone(),
+            run_all_tasks_before_exit: true,
             task_capacity: 16,
             share_strategy: share,
             wait_strategy: ReceiverWaitStrategy::Yield,
@@ -454,6 +509,9 @@ mod tests {
         
         let worker2 = WorkerSI::new(ConfigSI {
             index: 1,
+            exit_flag: exit_flag.clone(),
+            exit_barrier: exit_barrier.clone(),
+            run_all_tasks_before_exit: true,
             task_capacity: 16,
             share_strategy: share,
             wait_strategy: ReceiverWaitStrategy::Yield,
@@ -878,5 +936,17 @@ mod tests {
         handle.join().unwrap();
 
         assert_eq!(var.load(Ordering::SeqCst), 6);
+    }
+}
+
+fn rand_seed() -> [u32; 4] {
+    loop {
+        let seed = rand::thread_rng().gen::<[u32; 4]>();
+
+        // `rand::XorShiftRng` will panic if the seed is all zeroes.
+        // Ensure that does not happen.
+        if !(seed[0] == 0 && seed[1] == 0 && seed[2] == 0 && seed[3] == 0) {
+            return seed;
+        }
     }
 }
