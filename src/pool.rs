@@ -18,7 +18,8 @@ impl PoolRI {
                task_capcity:   usize,
                share_strategy: ShareStrategy,
                wait_strategy: ReceiverWaitStrategy,
-               timeout: Option<Duration>) -> PoolRI {
+               receiver_timeout: Duration,
+               channel_timeout: Duration) -> PoolRI {
         assert!(num_threads > 0);
 
         let mut channels = make_receiver_initiated_channels(num_threads);
@@ -28,7 +29,8 @@ impl PoolRI {
             task_capacity: task_capcity,
             share_strategy: share_strategy,
             wait_strategy: wait_strategy,
-            timeout: timeout,
+            receiver_timeout: receiver_timeout,
+            channel_timeout: channel_timeout,
             channel_data: channels.remove(0),
         });
         
@@ -39,7 +41,8 @@ impl PoolRI {
                     task_capacity: task_capcity,
                     share_strategy: share_strategy,
                     wait_strategy: wait_strategy,
-                    timeout: timeout,
+                    receiver_timeout: receiver_timeout,
+                    channel_timeout: channel_timeout,
                     channel_data: channel,
                 });
 
@@ -72,7 +75,8 @@ impl PoolSI {
     pub fn new(num_threads: usize,
                task_capcity: usize,
                share_strategy: ShareStrategy,
-               wait_strategy: ReceiverWaitStrategy) -> PoolSI {
+               wait_strategy: ReceiverWaitStrategy,
+               receiver_timeout: Duration) -> PoolSI {
         assert!(num_threads > 0);
 
         let mut channels = make_sender_initiated_channels(num_threads);
@@ -82,6 +86,7 @@ impl PoolSI {
             task_capacity: task_capcity,
             share_strategy: share_strategy,
             wait_strategy: wait_strategy,
+            receiver_timeout: receiver_timeout,
             channel_data: channels.remove(0),
         });
         
@@ -92,6 +97,7 @@ impl PoolSI {
                     task_capacity: task_capcity,
                     share_strategy: share_strategy,
                     wait_strategy: wait_strategy,
+                    receiver_timeout: receiver_timeout,
                     channel_data: channel,
                 });
 

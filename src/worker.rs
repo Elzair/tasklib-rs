@@ -17,7 +17,8 @@ pub struct ConfigRI {
     pub task_capacity: usize,
     pub share_strategy: ShareStrategy,
     pub wait_strategy: ReceiverWaitStrategy,
-    pub timeout: Option<Duration>,
+    pub receiver_timeout: Duration,
+    pub channel_timeout: Duration,
     pub channel_data: DataRI,
 }
 
@@ -26,7 +27,8 @@ pub struct WorkerRI {
     share_strategy: ShareStrategy,
     wait_strategy: ReceiverWaitStrategy,
     rng: RefCell<rand::XorShiftRng>,
-    timeout: Option<Duration>,
+    receiver_timeout: Duration,
+    channel_timeout: Duration,
     tasks: RefCell<VecDeque<Task>>,
     channel_data: DataRI,
 }
@@ -37,7 +39,8 @@ impl WorkerRI {
                        task_capacity,
                        share_strategy,
                        wait_strategy,
-                       timeout,
+                       receiver_timeout,
+                       channel_timeout,
                        channel_data,
         } = config;
 
@@ -64,7 +67,8 @@ impl WorkerRI {
             share_strategy: share_strategy,
             wait_strategy: wait_strategy,
             rng: RefCell::new(rand::XorShiftRng::from_seed(seed)),
-            timeout: timeout,
+            receiver_timeout: receiver_timeout,
+            channel_timeout: channel_timeout,
             tasks: RefCell::new(VecDeque::with_capacity(task_capacity)),
             channel_data: channel_data,
         }
@@ -120,18 +124,17 @@ impl WorkerRI {
                 },
             }
 
-            if let Some(timeout) = self.timeout {
-                if Instant::now().duration_since(start_time) >= timeout {
-                    return false;
-                }
+            if Instant::now().duration_since(start_time) >= self.channel_timeout {
+                return false;
             }
         }
     }
 
     fn acquire_tasks(&self) {
-        let mut got_tasks = false;
+        let start_time = Instant::now();
+        let mut done = false;
 
-        while !got_tasks {
+        while !done {
             let rand_idx = self.rand_index();
             let channel = &self.channel_data.channels[rand_idx];
 
@@ -141,18 +144,22 @@ impl WorkerRI {
             // Wait for either tasks or timeout.
             match self.try_get_tasks(channel) {
                 true => {
-                    got_tasks = true;
+                    done = true;
                 },
                 false => {
                     // Try to unsend request.
                     match channel.request_send.try_unsend() {
-                            // If we are too late, just block until we get all the tasks.
-                            Err(bc::TryUnsendError::TooLate) => {
-                                self.add_tasks(channel.task_get.receive());
-                            },
-                            _ => {},
-                        }
+                        // If we are too late, just block until we get all the tasks.
+                        Err(bc::TryUnsendError::TooLate) => {
+                            self.add_tasks(channel.task_get.receive());
+                        },
+                        _ => {},
+                    }
                 },
+            }
+
+            if Instant::now().duration_since(start_time) >= self.receiver_timeout {
+                done = true;
             }
         }
     }
@@ -214,6 +221,7 @@ pub struct ConfigSI {
     pub task_capacity: usize,
     pub share_strategy: ShareStrategy,
     pub wait_strategy: ReceiverWaitStrategy,
+    pub receiver_timeout: Duration,
     pub channel_data: DataSI,
 }
 
@@ -222,6 +230,7 @@ pub struct WorkerSI {
     share_strategy: ShareStrategy,
     wait_strategy: ReceiverWaitStrategy,
     rng: RefCell<rand::XorShiftRng>,
+    receiver_timeout: Duration,
     tasks: RefCell<VecDeque<Task>>,
     channel_data: DataSI,
 }
@@ -232,6 +241,7 @@ impl WorkerSI {
                        task_capacity,
                        share_strategy,
                        wait_strategy,
+                       receiver_timeout,
                        channel_data,
         } = config;
 
@@ -258,6 +268,7 @@ impl WorkerSI {
             share_strategy: share_strategy,
             wait_strategy: wait_strategy,
             rng: RefCell::new(rand::XorShiftRng::from_seed(seed)),
+            receiver_timeout: receiver_timeout,
             tasks: RefCell::new(VecDeque::with_capacity(task_capacity)),
             channel_data: channel_data,
         }
@@ -299,18 +310,19 @@ impl WorkerSI {
         // Send request.
         self.channel_data.request_send.send().unwrap();
 
-        // Wait for any other worker to respond.
-        let mut got_tasks = false;
+        // Wait for any other worker to respond or for a timeout.
+        let start_time = Instant::now();
+        let mut done = false;
 
-        while got_tasks == false {
+        while done == false {
             for channel in self.channel_data.channels.iter() {
                 if let Ok(task_data) = channel.task_get.try_receive() {
                     self.add_tasks(task_data);
-                    got_tasks = true;
+                    done = true;
                 }
             }
 
-            if got_tasks == false {
+            if done == false {
                 match self.wait_strategy {
                     ReceiverWaitStrategy::Sleep(duration) => {
                         thread::sleep(duration);
@@ -319,6 +331,10 @@ impl WorkerSI {
                         thread::yield_now();
                     },
                 };
+            }
+
+            if Instant::now().duration_since(start_time) >= self.receiver_timeout {
+                done = false;
             }
         }
     }
@@ -382,7 +398,7 @@ impl WorkerSI {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
-    use std::sync::{Arc, Condvar, Mutex};
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread;
     use std::time::Duration;
@@ -394,7 +410,8 @@ mod tests {
     use super::super::task::Task;
 
     fn helper_ri(share: ShareStrategy,
-                 timeout: Option<Duration>)
+                 receiver_timeout: Duration,
+                 channel_timeout: Duration)
                  -> (WorkerRI, WorkerRI) {
         let mut channels = make_receiver_initiated_channels(2);
         
@@ -403,7 +420,8 @@ mod tests {
             task_capacity: 16,
             share_strategy: share,
             wait_strategy: ReceiverWaitStrategy::Yield,
-            timeout: timeout,
+            receiver_timeout: receiver_timeout,
+            channel_timeout: channel_timeout,
             channel_data: channels.remove(0),
         });
         
@@ -412,14 +430,16 @@ mod tests {
             task_capacity: 16,
             share_strategy: share,
             wait_strategy: ReceiverWaitStrategy::Yield,
-            timeout: timeout,
+            receiver_timeout: receiver_timeout,
+            channel_timeout: channel_timeout,
             channel_data: channels.remove(0),
         });
 
         (worker1, worker2)
     }
 
-    fn helper_si(share: ShareStrategy)
+    fn helper_si(share: ShareStrategy,
+                 receiver_timeout: Duration)
                  -> (WorkerSI, WorkerSI) {
         let mut channels = make_sender_initiated_channels(2);
         
@@ -428,6 +448,7 @@ mod tests {
             task_capacity: 16,
             share_strategy: share,
             wait_strategy: ReceiverWaitStrategy::Yield,
+            receiver_timeout: receiver_timeout,
             channel_data: channels.remove(0),
         });
         
@@ -436,6 +457,7 @@ mod tests {
             task_capacity: 16,
             share_strategy: share,
             wait_strategy: ReceiverWaitStrategy::Yield,
+            receiver_timeout: receiver_timeout,
             channel_data: channels.remove(0),
         });
 
@@ -445,18 +467,23 @@ mod tests {
     #[test]
     fn test_make_worker_ri() {
         #[allow(unused_variables)]
-        let (worker1, worker2) = helper_ri(ShareStrategy::One, None);
+        let (worker1, worker2) = helper_ri(ShareStrategy::One,
+                                           Duration::new(1, 0),
+                                           Duration::new(0, 100));
     }
 
     #[test]
     fn test_make_worker_si() {
         #[allow(unused_variables)]
-        let (worker1, worker2) = helper_si(ShareStrategy::One);
+        let (worker1, worker2) = helper_si(ShareStrategy::One,
+                                           Duration::new(1, 0));
     }
 
     #[test]
     fn test_worker_ri_addtask() {
-        let (worker1, worker2) = helper_ri(ShareStrategy::One, None);
+        let (worker1, worker2) = helper_ri(ShareStrategy::One,
+                                           Duration::new(1, 0),
+                                           Duration::new(0, 100));
 
         let res = worker1.add_tasks(TaskData::OneTask(Box::new(|| { println!("Hello World!");})));
         assert_eq!(res, true);
@@ -471,7 +498,8 @@ mod tests {
 
     #[test]
     fn test_worker_si_addtask() {
-        let (worker1, worker2) = helper_si(ShareStrategy::One);
+        let (worker1, worker2) = helper_si(ShareStrategy::One,
+                                           Duration::new(1, 0));
 
         worker1.add_tasks(TaskData::OneTask(Box::new(|| { println!("Hello World!");})));
         assert_eq!(worker1.tasks.borrow_mut().len(), 1);
@@ -485,7 +513,9 @@ mod tests {
 
     #[test]
     fn test_worker_ri_share_one() {
-        let (worker1, worker2) = helper_ri(ShareStrategy::One, None);
+        let (worker1, worker2) = helper_ri(ShareStrategy::One,
+                                           Duration::new(1, 0),
+                                           Duration::new(0, 100));
 
         let var = Arc::new(AtomicUsize::new(0));
         let var1 = var.clone();
@@ -506,7 +536,8 @@ mod tests {
 
     #[test]
     fn test_worker_si_share_one() {
-        let (worker1, worker2) = helper_si(ShareStrategy::One);
+        let (worker1, worker2) = helper_si(ShareStrategy::One,
+                                           Duration::new(1, 0));
 
         let var = Arc::new(AtomicUsize::new(0));
         let var1 = var.clone();
@@ -527,7 +558,9 @@ mod tests {
 
     #[test]
     fn test_worker_ri_share_half() {
-        let (worker1, worker2) = helper_ri(ShareStrategy::Half, None);
+        let (worker1, worker2) = helper_ri(ShareStrategy::Half,
+                                           Duration::new(1, 0),
+                                           Duration::new(0, 100));
 
         let var = Arc::new(AtomicUsize::new(0));
         let var1 = var.clone();
@@ -564,7 +597,8 @@ mod tests {
 
     #[test]
     fn test_worker_si_share_half() {
-        let (worker1, worker2) = helper_si(ShareStrategy::Half);
+        let (worker1, worker2) = helper_si(ShareStrategy::Half,
+                                           Duration::new(1, 0));
 
         let var = Arc::new(AtomicUsize::new(0));
         let var1 = var.clone();
@@ -602,7 +636,8 @@ mod tests {
     #[test]
     fn test_worker_ri_try_get_tasks() {
         let (worker1, worker2) = helper_ri(ShareStrategy::One,
-                                           Some(Duration::new(0, 1000)));
+                                           Duration::new(1, 0),
+                                           Duration::new(0, 100));
 
 
         let var = Arc::new(AtomicUsize::new(0));
@@ -627,7 +662,8 @@ mod tests {
     #[test]
     fn test_worker_ri_acquire_tasks() {
         let (worker1, worker2) = helper_ri(ShareStrategy::One,
-                                           Some(Duration::new(0, 100000)));
+                                           Duration::new(1, 0),
+                                           Duration::new(0, 100));
 
         let var = Arc::new(AtomicUsize::new(0));
         let var1 = var.clone();
@@ -661,7 +697,8 @@ mod tests {
 
     #[test]
     fn test_worker_si_acquire_tasks() {
-        let (worker1, worker2) = helper_si(ShareStrategy::One);
+        let (worker1, worker2) = helper_si(ShareStrategy::One,
+                                           Duration::new(1, 0));
 
         let var = Arc::new(AtomicUsize::new(0));
         let var1 = var.clone();
@@ -696,7 +733,8 @@ mod tests {
     #[test]
     fn test_worker_ri_process_requests() {
         let (worker1, worker2) = helper_ri(ShareStrategy::One,
-                                           Some(Duration::new(0, 100000)));
+                                           Duration::new(1, 0),
+                                           Duration::new(0, 100));
 
         let var = Arc::new(AtomicUsize::new(0));
         let var1 = var.clone();
@@ -717,7 +755,8 @@ mod tests {
 
     #[test]
     fn test_worker_si_process_requests() {
-        let (worker1, worker2) = helper_si(ShareStrategy::One);
+        let (worker1, worker2) = helper_si(ShareStrategy::One,
+                                           Duration::new(1, 0));
 
         let var = Arc::new(AtomicUsize::new(0));
         let var1 = var.clone();
@@ -739,7 +778,8 @@ mod tests {
     #[test]
     fn test_worker_ri_run_once() {
         let (worker1, worker2) = helper_ri(ShareStrategy::One,
-                                           Some(Duration::new(1, 0)));
+                                           Duration::new(3, 0),
+                                           Duration::new(1, 0));
 
         let var = Arc::new(AtomicUsize::new(0));
         let var1 = var.clone();
@@ -790,7 +830,8 @@ mod tests {
 
     #[test]
     fn test_worker_si_run_once() {
-        let (worker1, worker2) = helper_si(ShareStrategy::One);
+        let (worker1, worker2) = helper_si(ShareStrategy::One,
+                                           Duration::new(5, 0));
 
         let var = Arc::new(AtomicUsize::new(0));
         let var1 = var.clone();
