@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Arc, Barrier};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -43,31 +43,18 @@ pub struct WorkerRI {
 
 impl WorkerRI {
     pub fn new(config: ConfigRI) -> WorkerRI {
-        let ConfigRI {
-            index,
-            exit_flag,
-            exit_barrier,
-            run_all_tasks_before_exit,
-            task_capacity,
-            share_strategy,
-            wait_strategy,
-            receiver_timeout,
-            channel_timeout,
-            channel_data,
-        } = config;
-
         WorkerRI {
-            index: index,
-            exit_flag: exit_flag,
-            exit_barrier: exit_barrier,
-            run_all_tasks_before_exit: run_all_tasks_before_exit,
-            share_strategy: share_strategy,
-            wait_strategy: wait_strategy,
+            index: config.index,
+            exit_flag: config.exit_flag,
+            exit_barrier: config.exit_barrier,
+            run_all_tasks_before_exit: config.run_all_tasks_before_exit,
+            share_strategy: config.share_strategy,
+            wait_strategy: config.wait_strategy,
             rng: RefCell::new(rand::XorShiftRng::from_seed(rand_seed())),
-            receiver_timeout: receiver_timeout,
-            channel_timeout: channel_timeout,
-            tasks: RefCell::new(VecDeque::with_capacity(task_capacity)),
-            channel_data: channel_data,
+            receiver_timeout: config.receiver_timeout,
+            channel_timeout: config.channel_timeout,
+            tasks: RefCell::new(VecDeque::with_capacity(config.task_capacity)),
+            channel_data: config.channel_data,
         }
     }
 
@@ -255,29 +242,17 @@ pub struct WorkerSI {
 
 impl WorkerSI {
     pub fn new(config: ConfigSI) -> WorkerSI {
-        let ConfigSI {
-            index,
-            exit_flag,
-            exit_barrier,
-            run_all_tasks_before_exit,
-            task_capacity,
-            share_strategy,
-            wait_strategy,
-            receiver_timeout,
-            channel_data,
-        } = config;
-
         WorkerSI {
-            index: index,
-            exit_flag: exit_flag,
-            exit_barrier: exit_barrier,
-            run_all_tasks_before_exit: run_all_tasks_before_exit,
-            share_strategy: share_strategy,
-            wait_strategy: wait_strategy,
+            index: config.index,
+            exit_flag: config.exit_flag,
+            exit_barrier: config.exit_barrier,
+            run_all_tasks_before_exit: config.run_all_tasks_before_exit,
+            share_strategy: config.share_strategy,
+            wait_strategy: config.wait_strategy,
             rng: RefCell::new(rand::XorShiftRng::from_seed(rand_seed())),
-            receiver_timeout: receiver_timeout,
-            tasks: RefCell::new(VecDeque::with_capacity(task_capacity)),
-            channel_data: channel_data,
+            receiver_timeout: config.receiver_timeout,
+            tasks: RefCell::new(VecDeque::with_capacity(config.task_capacity)),
+            channel_data: config.channel_data,
         }
     }
 
