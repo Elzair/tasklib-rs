@@ -14,6 +14,11 @@ use super::channel::{ChannelRI, ChannelSI, DataRI, DataSI};
 use super::task::Task;
 use super::task::Data as TaskData;
 
+pub trait Worker {
+    fn get_index(&self) -> usize; 
+    fn signal_exit(&self); 
+}
+
 pub struct ConfigRI {
     pub index: usize,
     pub exit_flag: Arc<AtomicBool>,
@@ -28,8 +33,8 @@ pub struct ConfigRI {
 }
 
 pub struct WorkerRI {
-    pub index: usize,
-    pub exit_flag: Arc<AtomicBool>,
+    index: usize,
+    exit_flag: Arc<AtomicBool>,
     exit_barrier: Arc<Barrier>,
     run_all_tasks_before_exit: bool,
     share_strategy: ShareStrategy,
@@ -215,6 +220,18 @@ impl WorkerRI {
     }
 }
 
+impl Worker for WorkerRI {
+    #[inline]
+    fn get_index(&self) -> usize {
+        self.index
+    }
+
+    #[inline]
+    fn signal_exit(&self) {
+        self.exit_flag.store(true, Ordering::SeqCst);
+    }
+}
+
 pub struct ConfigSI {
     pub index: usize,
     pub exit_flag: Arc<AtomicBool>,
@@ -228,7 +245,7 @@ pub struct ConfigSI {
 }
 
 pub struct WorkerSI {
-    pub index: usize,
+    index: usize,
     exit_flag: Arc<AtomicBool>,
     exit_barrier: Arc<Barrier>,
     run_all_tasks_before_exit: bool,
@@ -388,6 +405,18 @@ impl WorkerSI {
     fn rand_index(&self) -> usize {
         self.rng.borrow_mut().gen::<usize>()
             % self.channel_data.channels.len()
+    }
+}
+
+impl Worker for WorkerSI {
+    #[inline]
+    fn get_index(&self) -> usize {
+        self.index
+    }
+
+    #[inline]
+    fn signal_exit(&self) {
+        self.exit_flag.store(true, Ordering::SeqCst);
     }
 }
 
