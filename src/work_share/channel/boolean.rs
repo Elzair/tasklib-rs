@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-pub fn make_boolchan() -> (Sender, Receiver) {
+pub fn channel() -> (Sender, Receiver) {
     let inner = Arc::new(AtomicBool::new(false));
     
     (
@@ -61,11 +61,11 @@ pub enum TryUnsendError {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::Ordering;
-    use super::{SendError, TryUnsendError, make_boolchan};
+    use super::*;
 
     #[test]
-    fn test_make_boolchan() {
-        let (tx, rx) = make_boolchan();
+    fn test_channel() {
+        let (tx, rx) = channel();
 
         assert_eq!(tx.inner.load(Ordering::SeqCst), false);
         assert_eq!(rx.inner.load(Ordering::SeqCst), false);
@@ -74,7 +74,7 @@ mod tests {
     #[test]
     fn test_sender_send() {
         #[allow(unused_variables)]
-        let (tx, rx) = make_boolchan();
+        let (tx, rx) = channel();
 
         tx.send().unwrap();
 
@@ -84,7 +84,7 @@ mod tests {
     #[test]
     fn test_sender_send_twice() {
         #[allow(unused_variables)]
-        let (tx, rx) = make_boolchan();
+        let (tx, rx) = channel();
 
         tx.send().unwrap();
 
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn test_sender_try_unsend() {
         #[allow(unused_variables)]
-        let (tx, rx) = make_boolchan();
+        let (tx, rx) = channel();
 
         tx.inner.store(true, Ordering::SeqCst);
 
@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn test_sender_try_unsend_too_late() {
         #[allow(unused_variables)]
-        let (tx, rx) = make_boolchan();
+        let (tx, rx) = channel();
 
         match tx.try_unsend() {
             Err(TryUnsendError::TooLate) => {},
@@ -118,7 +118,7 @@ mod tests {
     #[test]
     fn test_receiver_recv() {
         #[allow(unused_variables)]
-        let (tx, rx) = make_boolchan();
+        let (tx, rx) = channel();
 
         rx.inner.store(true, Ordering::SeqCst);
 
@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn test_receiver_recv_no_sent() {
         #[allow(unused_variables)]
-        let (tx, rx) = make_boolchan();
+        let (tx, rx) = channel();
 
         assert_eq!(rx.receive(), false);
         assert_eq!(rx.inner.load(Ordering::SeqCst), false);
@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn test_send_receive() {
-        let (tx, rx) = make_boolchan();
+        let (tx, rx) = channel();
 
         tx.send().unwrap();
 
@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn test_send_try_unsend() {
-        let (tx, rx) = make_boolchan();
+        let (tx, rx) = channel();
 
         tx.send().unwrap();
 
@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn test_send_receive_try_unsend() {
-        let (tx, rx) = make_boolchan();
+        let (tx, rx) = channel();
 
         tx.send().unwrap();
 
@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn test_send_multiple_receive() {
-        let (tx, rx1) = make_boolchan();
+        let (tx, rx1) = channel();
         let rx2 = rx1.clone();
 
         tx.send().unwrap();

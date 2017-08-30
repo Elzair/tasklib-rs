@@ -5,9 +5,8 @@ extern crate rand;
 use std::time::Duration;
 
 pub mod task;
-mod worker;
-pub mod pool;
-mod channel;
+pub mod worker;
+pub mod work_share;
 
 #[derive(Clone, Copy)]
 pub enum ShareStrategy {
@@ -28,7 +27,8 @@ pub enum ReceiverWaitStrategy {
 }
 
 pub use task::Task;
-pub use pool::{PoolRI, PoolSI};
+pub use worker::Worker;
+// pub use pool::{PoolRI, PoolSI};
 // pub use worker::{WorkerRI, WorkerSI};
 
 #[cfg(test)]

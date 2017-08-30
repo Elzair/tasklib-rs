@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
-use super::super::task::Data as TaskData;
+use super::super::super::task::Data as TaskData;
 
-pub fn make_taskchan() -> (Sender, Receiver) {
+pub fn channel() -> (Sender, Receiver) {
     let inner: Arc<Mutex<Option<TaskData>>> = Arc::new(Mutex::new(None));
     
     (
@@ -72,19 +72,19 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     
-    use super::{TaskData, SendError, TryReceiveError, make_taskchan};
-    use super::super::super::task::Task;
+    use super::*;
+    use super::super::super::super::task::Task;
 
     #[test]
     fn test_creation() {
         #[allow(unused_variables)]
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = channel();
     }
 
     #[test]
     fn test_sender_send_no_tasks() {
         #[allow(unused_variables)]
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = channel();
 
         tx.send(TaskData::NoTasks).unwrap();
 
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn test_sender_send_one_task() {
         #[allow(unused_variables)]
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = channel();
 
         let data = TaskData::OneTask(Box::new(|| { println!("Hello world!"); }));
         tx.send(data).unwrap();
@@ -111,7 +111,7 @@ mod tests {
     #[test]
     fn test_sender_send_many_tasks() {
         #[allow(unused_variables)]
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = channel();
 
         let data1 = Box::new(|| { println!("Hello world!"); });
         let data2 = Box::new(|| { println!("Hello again!"); });
@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn test_sender_send_unreceived() {
         #[allow(unused_variables)]
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = channel();
 
         tx.send(TaskData::NoTasks).unwrap();
 
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_receiver_try_receive_no_tasks() {
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = channel();
 
         tx.send(TaskData::NoTasks).unwrap();
 
@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn test_receiver_try_receive_one_task() {
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = channel();
 
         let var = Arc::new(AtomicUsize::new(0));
         let var2 = var.clone();
@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn test_receiver_try_receive_many_tasks() {
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = channel();
 
         let var = Arc::new(AtomicUsize::new(0));
         let var1 = var.clone();
@@ -228,7 +228,7 @@ mod tests {
     #[test]
     fn test_receiver_try_receive_empty() {
         #[allow(unused_variables)]
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = channel();
 
         match rx.try_receive() {
             Err(TryReceiveError::Empty) => {},
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn test_receiver_receive() {
-        let (tx, rx) = make_taskchan();
+        let (tx, rx) = channel();
 
         tx.send(TaskData::NoTasks).unwrap();
 
