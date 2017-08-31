@@ -1,5 +1,4 @@
-use std::sync::{Arc, Barrier};
-use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
