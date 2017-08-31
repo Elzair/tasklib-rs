@@ -1,7 +1,6 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::{Arc, Barrier};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -11,16 +10,15 @@ use rand::{Rng, SeedableRng};
 use super::super::super::{ShareStrategy, ReceiverWaitStrategy};
 use super::super::super::Worker as WorkerTrait;
 use super::super::channel::boolean as bc;
-use super::channel::{Channel, Data};
 use super::super::super::task::Task;
 use super::super::super::task::Data as TaskData;
 use super::super::util;
+use super::channel::{Channel, Data};
+use super::shared::Data as SharedData;
 
 pub struct Config {
     pub index: usize,
-    pub exit_flag: Arc<AtomicBool>,
-    pub exit_barrier: Arc<Barrier>,
-    pub run_all_tasks_before_exit: bool,
+    pub shared_data: Arc<SharedData>,
     pub task_capacity: usize,
     pub share_strategy: ShareStrategy,
     pub wait_strategy: ReceiverWaitStrategy,
@@ -31,9 +29,7 @@ pub struct Config {
 
 pub struct Worker {
     index: usize,
-    exit_flag: Arc<AtomicBool>,
-    exit_barrier: Arc<Barrier>,
-    run_all_tasks_before_exit: bool,
+    shared_data: Arc<SharedData>,
     share_strategy: ShareStrategy,
     wait_strategy: ReceiverWaitStrategy,
     rng: RefCell<rand::XorShiftRng>,
@@ -47,9 +43,7 @@ impl Worker {
     pub fn new(config: Config) -> Worker {
         Worker {
             index: config.index,
-            exit_flag: config.exit_flag,
-            exit_barrier: config.exit_barrier,
-            run_all_tasks_before_exit: config.run_all_tasks_before_exit,
+            shared_data: config.shared_data,
             share_strategy: config.share_strategy,
             wait_strategy: config.wait_strategy,
             rng: RefCell::new(rand::XorShiftRng::from_seed(util::rand_seed())),
@@ -61,12 +55,12 @@ impl Worker {
     }
 
     pub fn run(&self) {
-        while !self.exit_flag.load(Ordering::SeqCst) {
+        while !self.shared_data.should_exit() {
             self.run_once();
         }
 
         // Run any remaining tasks if instructed to do so.
-        if self.run_all_tasks_before_exit {
+        if self.shared_data.should_run_tasks() {
             loop {
                 let mut is_empty = !self.tasks.borrow().is_empty();
 
@@ -78,7 +72,7 @@ impl Worker {
         }
 
         // Wait on all other workers to stop running before dropping everything.
-        self.exit_barrier.wait();
+        self.shared_data.wait_on_exit();
     }
 
     #[inline]
@@ -225,22 +219,23 @@ impl WorkerTrait for Worker {
 
     #[inline]
     fn signal_exit(&self) {
-        self.exit_flag.store(true, Ordering::SeqCst);
+        self.shared_data.signal_exit();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
-    use std::sync::{Arc, Barrier};
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread;
     use std::time::Duration;
     
     use super::super::super::super::{ShareStrategy, ReceiverWaitStrategy};
-    use super::super::channel::make_channels;
     use super::super::super::super::task::Data as TaskData;
     use super::super::super::super::task::Task;
+    use super::super::channel::make_channels;
+    use super::super::shared::Data as SharedData;
     use super::*;
 
     fn helper(share: ShareStrategy,
@@ -248,14 +243,11 @@ mod tests {
               channel_timeout: Duration)
               -> (Worker, Worker) {
         let mut channels = make_channels(2);
-        let exit_flag = Arc::new(AtomicBool::new(false));
-        let exit_barrier = Arc::new(Barrier::new(2));
+        let shared_data = Arc::new(SharedData::new(1));
         
         let worker1 = Worker::new(Config {
             index: 0,
-            exit_flag: exit_flag.clone(),
-            exit_barrier: exit_barrier.clone(),
-            run_all_tasks_before_exit: true,
+            shared_data: shared_data.clone(),
             task_capacity: 16,
             share_strategy: share,
             wait_strategy: ReceiverWaitStrategy::Yield,
@@ -266,9 +258,7 @@ mod tests {
         
         let worker2 = Worker::new(Config {
             index: 1,
-            exit_flag: exit_flag.clone(),
-            exit_barrier: exit_barrier.clone(),
-            run_all_tasks_before_exit: true,
+            shared_data: shared_data.clone(),
             task_capacity: 16,
             share_strategy: share,
             wait_strategy: ReceiverWaitStrategy::Yield,

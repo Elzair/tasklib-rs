@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use super::super::super::{ReceiverWaitStrategy, ShareStrategy};
 use super::channel::make_channels;
+use super::shared::Data as SharedData;
 use super::worker::Worker;
 use super::worker::Config as WorkerConfig;
 
@@ -15,7 +16,6 @@ pub struct Pool {
 
 impl Pool {
     pub fn new(num_threads: usize,
-               run_all_tasks_before_exit: bool,
                task_capacity: usize,
                share_strategy: ShareStrategy,
                wait_strategy: ReceiverWaitStrategy,
@@ -23,14 +23,11 @@ impl Pool {
         assert!(num_threads > 0);
 
         let mut channels = make_channels(num_threads);
-        let exit_flag = Arc::new(AtomicBool::new(false));
-        let exit_barrier = Arc::new(Barrier::new(num_threads-1));
+        let shared_data = Arc::new(SharedData::new(num_threads-1));
 
         let local_worker = Worker::new(WorkerConfig {
             index: 0,
-            exit_flag: exit_flag.clone(),
-            exit_barrier: exit_barrier.clone(),
-            run_all_tasks_before_exit: run_all_tasks_before_exit,
+            shared_data: shared_data.clone(),
             task_capacity: task_capacity,
             share_strategy: share_strategy,
             wait_strategy: wait_strategy,
@@ -42,9 +39,7 @@ impl Pool {
             .map(|(index, channel)| {
                 let worker = Worker::new(WorkerConfig {
                     index: index,
-                    exit_flag: exit_flag.clone(),
-                    exit_barrier: exit_barrier.clone(),
-                    run_all_tasks_before_exit: run_all_tasks_before_exit,
+                    shared_data: shared_data.clone(),
                     task_capacity: task_capacity,
                     share_strategy: share_strategy,
                     wait_strategy: wait_strategy,
