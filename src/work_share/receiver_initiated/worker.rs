@@ -84,7 +84,7 @@ impl Worker {
     }
 
     #[inline]
-    fn add_tasks(&self, task_data: TaskData) {
+    pub fn add_tasks(&self, task_data: TaskData) {
         match task_data {
             TaskData::ManyTasks(mut tasks) => {
                 self.tasks.borrow_mut().append(&mut tasks);
