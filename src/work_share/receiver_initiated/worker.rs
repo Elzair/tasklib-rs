@@ -7,12 +7,12 @@ use std::time::{Duration, Instant};
 use rand;
 use rand::{Rng, SeedableRng};
 
+use super::super::super::rng;
 use super::super::super::{ShareStrategy, ReceiverWaitStrategy};
 use super::super::super::Worker as WorkerTrait;
 use super::super::channel::boolean as bc;
 use super::super::super::task::Task;
 use super::super::task::Data as TaskData;
-use super::super::util;
 use super::channel::{Channel, Data};
 use super::shared::Data as SharedData;
 
@@ -46,7 +46,7 @@ impl Worker {
             shared_data: config.shared_data,
             share_strategy: config.share_strategy,
             wait_strategy: config.wait_strategy,
-            rng: RefCell::new(rand::XorShiftRng::from_seed(util::rand_seed())),
+            rng: RefCell::new(rand::XorShiftRng::from_seed(rng::rand_seed())),
             receiver_timeout: config.receiver_timeout,
             channel_timeout: config.channel_timeout,
             tasks: RefCell::new(VecDeque::with_capacity(config.task_capacity)),

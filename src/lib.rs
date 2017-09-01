@@ -4,6 +4,7 @@ extern crate rand;
 
 use std::time::Duration;
 
+mod rng;
 pub mod task;
 pub mod worker;
 pub mod work_share;
