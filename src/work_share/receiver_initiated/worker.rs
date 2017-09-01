@@ -231,8 +231,6 @@ mod tests {
     use std::thread;
     use std::time::Duration;
     
-    // use super::super::super::super::{ShareStrategy, ReceiverWaitStrategy};
-    // use super::super::super::super::task::Data as TaskData;
     use super::super::super::super::task::Task;
     use super::super::channel::make_channels;
     use super::super::shared::Data as SharedData;

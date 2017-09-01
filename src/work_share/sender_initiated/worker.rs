@@ -144,10 +144,7 @@ impl Worker {
             }
             
             // Share tasks with any thread that requests them.
-            // if self.channel_data.channels[index]
-            //     .request_get.receive() == true {
             if channel.request_get.receive() == true {
-                    // self.share(index);
                 self.share(channel);
             }
         }
@@ -207,8 +204,6 @@ mod tests {
     
     use super::super::super::super::{ShareStrategy, ReceiverWaitStrategy};
     use super::super::channel::make_channels;
-    // use super::super::super::super::task::Data as TaskData;
-    // use super::super::super::super::task::Task;
     use super::*;
 
     fn helper(share: ShareStrategy,

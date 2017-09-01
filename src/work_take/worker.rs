@@ -78,7 +78,7 @@ impl Worker {
     #[inline]
     fn rand_index(&self) -> usize {
         self.rng.borrow_mut().gen::<usize>()
-            % self.shared_data.queues.len()
+            % self.shared_data.get_num_queues()
     }
 }
 
