@@ -100,7 +100,7 @@ impl Worker {
         let start_time = Instant::now();
         let mut done = false;
 
-        while done == false {
+        while !done {
             for channel in self.channel_data.channels.iter() {
                 if let Ok(task_data) = channel.task_get.try_receive() {
                     self.add_tasks(task_data);
@@ -108,7 +108,7 @@ impl Worker {
                 }
             }
 
-            if done == false {
+            if !done {
                 match self.wait_strategy {
                     ReceiverWaitStrategy::Sleep(duration) => {
                         thread::sleep(duration);
@@ -120,7 +120,7 @@ impl Worker {
             }
 
             if Instant::now().duration_since(start_time) >= self.receiver_timeout {
-                done = false;
+                done = true;
             }
         }
     }
@@ -347,18 +347,28 @@ mod tests {
             assert_eq!(var.load(Ordering::SeqCst), 1);
         });
 
+        // Simulate sharing tasks
         let mut done = false;
 
-        while done == false {
+        while !done {
             let res = worker1.channel_data.channels[0].request_get.receive();
 
-            if res == true {
+            if res {
                 worker1.share(&worker1.channel_data.channels[0]);
                 done = true;
             }
         }
 
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn test_worker_acquire_tasks_timeout() {
+        #[allow(unused_variables)]
+        let (worker1, worker2) = helper(ShareStrategy::One,
+                                        Duration::new(1, 0));
+
+        worker1.acquire_tasks();
     }
 
     #[test]
@@ -373,10 +383,12 @@ mod tests {
             var1.fetch_add(1, Ordering::SeqCst);
         })));
 
+        // Simulate requesting tasks.
         worker2.channel_data.request_send.send().unwrap();
 
         worker1.process_requests();
 
+        // Simulate getting and running tasks.
         worker2.add_tasks(worker2.channel_data.channels[0].task_get.receive());
 
         worker2.tasks.borrow_mut().pop_front().unwrap().call_box();
@@ -433,5 +445,21 @@ mod tests {
         handle.join().unwrap();
 
         assert_eq!(var.load(Ordering::SeqCst), 6);
+    }
+
+    #[test]
+    fn test_worker_run_signal_exit() {
+        let (worker1, worker2) = helper(ShareStrategy::One,
+                                        Duration::new(1, 0));
+
+
+        let handle = thread::spawn(move || {
+            worker2.run();
+        });
+        
+        thread::sleep(Duration::new(0, 100));
+        worker1.signal_exit();
+
+        handle.join().unwrap();
     }
 }

@@ -414,10 +414,10 @@ mod tests {
 
         let mut done = false;
 
-        while done == false {
+        while !done {
             let res = worker1.channel_data.channels[0].request_get.receive();
 
-            if res == true {
+            if res {
                 worker1.share(&worker1.channel_data.channels[0]);
                 done = true;
             }
@@ -500,5 +500,22 @@ mod tests {
         handle.join().unwrap();
 
         assert_eq!(var.load(Ordering::SeqCst), 6);
+    }
+
+    #[test]
+    fn test_worker_run_signal_exit() {
+        let (worker1, worker2) = helper(ShareStrategy::One,
+                                        Duration::new(0, 200),
+                                        Duration::new(0, 100));
+
+
+        let handle = thread::spawn(move || {
+            worker2.run();
+        });
+        
+        thread::sleep(Duration::new(1, 0));
+        worker1.signal_exit();
+
+        handle.join().unwrap();
     }
 }
