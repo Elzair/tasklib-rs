@@ -82,7 +82,7 @@ fn make_ri_channels(nt: usize)
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::super::task::Data as TaskData;
+    use super::super::super::task::Data as TaskData;
     use super::*;
 
     static NT: usize = 3;

@@ -10,7 +10,7 @@ use rand::{Rng, SeedableRng};
 use super::super::super::{ShareStrategy, ReceiverWaitStrategy};
 use super::super::super::Worker as WorkerTrait;
 use super::super::super::task::Task;
-use super::super::super::task::Data as TaskData;
+use super::super::task::Data as TaskData;
 use super::super::util;
 use super::channel::{Channel, Data};
 use super::shared::Data as SharedData;
@@ -57,13 +57,11 @@ impl Worker {
 
         // Run any remaining tasks if instructed to do so.
         if self.shared_data.should_run_tasks() {
-            loop {
-                let mut is_empty = !self.tasks.borrow().is_empty();
+            let mut is_empty = self.tasks.borrow().is_empty();
 
-                while !is_empty {
-                    self.tasks.borrow_mut().pop_front().unwrap().call_box();
-                    is_empty = self.tasks.borrow().is_empty();
-                }
+            while !is_empty {
+                self.tasks.borrow_mut().pop_front().unwrap().call_box();
+                is_empty = self.tasks.borrow().is_empty();
             }
         }
 
@@ -71,7 +69,6 @@ impl Worker {
         self.shared_data.wait_on_exit();
     }
 
-    #[inline]
     pub fn run_once(&self) {
         if self.tasks.borrow().is_empty() {
             self.acquire_tasks();
@@ -83,17 +80,15 @@ impl Worker {
     }
 
     #[inline]
-    pub fn add_tasks(&self, task_data: TaskData) -> bool {
+    pub fn add_tasks(&self, task_data: TaskData) {
         match task_data {
             TaskData::ManyTasks(mut tasks) => {
                 self.tasks.borrow_mut().append(&mut tasks);
-                true
             },
             TaskData::OneTask(task) => {
                 self.tasks.borrow_mut().push_back(task);
-                true
             },
-            TaskData::NoTasks => { false },
+            TaskData::NoTasks => {},
         }
     }
 
@@ -193,7 +188,12 @@ impl WorkerTrait for Worker {
 
     #[inline]
     fn signal_exit(&self) {
-        self.shared_data.signal_exit();
+        self.shared_data.signal_exit(false);
+    }
+
+    #[inline]
+    fn add_task(&self, task: Task) {
+        self.tasks.borrow_mut().push_back(task);
     }
 }
 
@@ -207,8 +207,8 @@ mod tests {
     
     use super::super::super::super::{ShareStrategy, ReceiverWaitStrategy};
     use super::super::channel::make_channels;
-    use super::super::super::super::task::Data as TaskData;
-    use super::super::super::super::task::Task;
+    // use super::super::super::super::task::Data as TaskData;
+    // use super::super::super::super::task::Task;
     use super::*;
 
     fn helper(share: ShareStrategy,
@@ -248,7 +248,16 @@ mod tests {
     }
 
     #[test]
-    fn test_worker_addtask() {
+    fn test_worker_add_task() {
+        let (worker1, _) = helper(ShareStrategy::One,
+                                  Duration::new(1, 0));
+
+        worker1.add_tasks(TaskData::OneTask(Box::new(|| { println!("Hello World!");})));
+        assert_eq!(worker1.tasks.borrow_mut().len(), 1);
+    }
+
+    #[test]
+    fn test_worker_add_tasks() {
         let (worker1, worker2) = helper(ShareStrategy::One,
                                         Duration::new(1, 0));
 

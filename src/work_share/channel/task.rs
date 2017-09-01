@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use super::super::super::task::Data as TaskData;
+use super::super::task::Data as TaskData;
 
 pub fn channel() -> (Sender, Receiver) {
     let inner: Arc<Mutex<Option<TaskData>>> = Arc::new(Mutex::new(None));

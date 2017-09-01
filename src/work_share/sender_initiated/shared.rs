@@ -27,14 +27,12 @@ impl Data {
     }
 
     #[inline]
-    pub fn signal_exit(&self) {
-        self.exit_flag.store(true, Ordering::SeqCst);
-    }
+    pub fn signal_exit(&self, panicking: bool) {
+        if panicking {
+            // Tell workers to exit ASAP.
+            self.run_all_tasks_before_exit.store(false, Ordering::SeqCst);
+        }
 
-    #[inline]
-    pub fn signal_exit_on_panic(&self) {
-        // Tell workers to exit ASAP.
-        self.run_all_tasks_before_exit.store(false, Ordering::SeqCst);
         self.exit_flag.store(true, Ordering::SeqCst);
     }
 
