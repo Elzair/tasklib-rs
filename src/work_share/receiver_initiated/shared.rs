@@ -11,8 +11,7 @@ impl Data {
     pub fn new(n: usize) -> Data {
         Data {
             exit_flag: AtomicBool::new(false),
-            // TODO: Make this configurable
-            exit_barrier: Barrier::new(n-1),
+            exit_barrier: Barrier::new(n),
             run_all_tasks_before_exit: AtomicBool::new(true),
         }
     }
@@ -117,6 +116,7 @@ mod tests {
             shared2.wait_on_exit();
         });
 
+        shared.wait_on_exit();
         handle.join().unwrap();
     }
 }

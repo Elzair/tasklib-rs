@@ -241,7 +241,7 @@ mod tests {
               channel_timeout: Duration)
               -> (Worker, Worker) {
         let mut channels = make_channels(2);
-        let shared_data = Arc::new(SharedData::new(1));
+        let shared_data = Arc::new(SharedData::new(2));
         
         let worker1 = Worker::new(Config {
             index: 0,
@@ -515,6 +515,7 @@ mod tests {
         
         thread::sleep(Duration::new(1, 0));
         worker1.signal_exit();
+        worker1.shared_data.wait_on_exit();
 
         handle.join().unwrap();
     }
