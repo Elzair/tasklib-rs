@@ -179,6 +179,7 @@ mod tests {
         
         thread::sleep(Duration::new(0, 500));
         worker1.signal_exit();
+        worker1.shared_data.wait_on_exit();
 
         handle.join().unwrap();
     }
