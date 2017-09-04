@@ -23,7 +23,6 @@ impl Pool {
         assert!(num_threads > 0);
 
         let mut channels = make_channels(num_threads);
-        // TODO: Make this configurable.
         let shared_data = Arc::new(SharedData::new(num_threads));
 
         let local_worker = Worker::new(WorkerConfig {
