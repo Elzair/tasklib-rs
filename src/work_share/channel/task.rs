@@ -22,17 +22,6 @@ pub struct Sender<T> {
 
 impl<T> Sender<T> {
     pub fn send(&self, data: T) -> Result<(), SendError> {
-        // let mut value = self.inner.lock().unwrap();
-
-        // match *value {
-        //     None => {},
-        //     _ => { return Err(SendError::UnreceivedValue); },
-        // }
-
-        // *value = Some(data);
-
-        // Ok(())
-
         // First update actual data.
         unsafe {
             // Check if Receiver has not claimed previous data.
@@ -58,13 +47,6 @@ pub struct Receiver<T> {
 impl<T> Receiver<T> {
     #[inline]
     pub fn try_receive(&self) -> Result<T, TryReceiveError> {
-        // let mut value = self.inner.lock().unwrap();
-
-        // match (*value).take() {
-        //     Some(x) => Ok(x),
-        //     None => Err(TryReceiveError::Empty),
-        // }
-
         // First check to see if any data has been sent.
         match self.inner.has_data.compare_and_swap(true, false, Ordering::SeqCst) {
             true => {
@@ -132,12 +114,7 @@ mod tests {
 
         tx.send(TaskData::NoTasks).unwrap();
 
-        // match *tx.inner.lock().unwrap() {
-        //     Some(TaskData::NoTasks) => {},
-        //     _ => { assert!(false); },
-        // };
         unsafe {
-            // match (*tx.inner.data.get()).take() {
             match *tx.inner.data.get() {
                 Some(TaskData::NoTasks) => {},
                 _ => { assert!(false); },
@@ -153,12 +130,7 @@ mod tests {
         let data = TaskData::OneTask(Box::new(|| { println!("Hello world!"); }));
         tx.send(data).unwrap();
 
-        // match *tx.inner.lock().unwrap() {
-        //     Some(TaskData::OneTask(_)) => {},
-        //     _ => { assert!(false); },
-        // };
         unsafe {
-            // match (*tx.inner.data.get()).take() {
             match *tx.inner.data.get() {
                 Some(TaskData::OneTask(_)) => {},
                 _ => { assert!(false); },
@@ -179,12 +151,7 @@ mod tests {
 
         tx.send(TaskData::ManyTasks(data)).unwrap();
 
-        // match *tx.inner.lock().unwrap() {
-        //     Some(TaskData::ManyTasks(_)) => {},
-        //     _ => { assert!(false); },
-        // };
         unsafe {
-            // match (*tx.inner.data.get()).take() {
             match *tx.inner.data.get() {
                 Some(TaskData::ManyTasks(_)) => {},
                 _ => { assert!(false); },
@@ -216,12 +183,7 @@ mod tests {
             _ => { assert!(false); },
         };
 
-        // match *rx.inner.lock().unwrap() {
-        //     None => {},
-        //     _ => { assert!(false); },
-        // };
         unsafe {
-            // match (*tx.inner.data.get()).take() {
             match *tx.inner.data.get() {
                 None => {},
                 _ => { assert!(false); },
@@ -251,12 +213,7 @@ mod tests {
 
         assert_eq!(var.load(Ordering::SeqCst), 1);
 
-        // match *rx.inner.lock().unwrap() {
-        //     None => {},
-        //     _ => { assert!(false); },
-        // };
         unsafe {
-            // match (*tx.inner.data.get()).take() {
             match *tx.inner.data.get() {
                 None => {},
                 _ => { assert!(false); },
@@ -298,12 +255,7 @@ mod tests {
 
         assert_eq!(var.load(Ordering::SeqCst), 2);
 
-        // match *rx.inner.lock().unwrap() {
-        //     None => {},
-        //     _ => { assert!(false); },
-        // };
         unsafe {
-            // match (*tx.inner.data.get()).take() {
             match *tx.inner.data.get() {
                 None => {},
                 _ => { assert!(false); },
