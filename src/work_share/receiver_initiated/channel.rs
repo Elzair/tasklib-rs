@@ -2,14 +2,16 @@ use itertools;
 
 use super::super::util;
 use super::super::channel;
+use super::super::task::Data as TaskData;
+
 use self::channel::boolean as bc;
 use self::channel::task as tc;
 
 pub struct Channel {
     pub request_send: bc::Sender,
     pub request_get: bc::Receiver,
-    pub task_send: tc::Sender,
-    pub task_get: tc::Receiver,
+    pub task_send: tc::Sender<TaskData>,
+    pub task_get: tc::Receiver<TaskData>,
 }
 
 pub struct Data {
@@ -17,7 +19,7 @@ pub struct Data {
 }
 
 pub fn make_channels(nt: usize) -> Vec<Data> {
-    let (tasks_tx, tasks_rx) = channel::make_shared_channels(nt);
+    let (tasks_tx, tasks_rx) = channel::make_shared_channels::<TaskData>(nt);
     let (rqsts_tx, rqsts_rx) = make_ri_channels(nt);
 
     itertools::multizip(

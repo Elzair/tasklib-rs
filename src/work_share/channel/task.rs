@@ -1,9 +1,12 @@
-use std::sync::{Arc, Mutex};
+use std::cell::UnsafeCell;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::super::task::Data as TaskData;
-
-pub fn channel() -> (Sender, Receiver) {
-    let inner: Arc<Mutex<Option<TaskData>>> = Arc::new(Mutex::new(None));
+pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
+    let inner = Arc::new(Inner {
+        has_data: AtomicBool::new(false),
+        data: UnsafeCell::new(None),
+    });
     
     (
         Sender { inner: inner.clone() },
@@ -13,41 +16,71 @@ pub fn channel() -> (Sender, Receiver) {
     )
 }
 
-pub struct Sender {
-    inner: Arc<Mutex<Option<TaskData>>>,
+pub struct Sender<T> {
+    inner: Arc<Inner<T>>,
 }
 
-impl Sender {
-    pub fn send(&self, data: TaskData) -> Result<(), SendError> {
-        let mut value = self.inner.lock().unwrap();
+impl<T> Sender<T> {
+    pub fn send(&self, data: T) -> Result<(), SendError> {
+        // let mut value = self.inner.lock().unwrap();
 
-        match *value {
-            None => {},
-            _ => { return Err(SendError::UnreceivedValue); },
+        // match *value {
+        //     None => {},
+        //     _ => { return Err(SendError::UnreceivedValue); },
+        // }
+
+        // *value = Some(data);
+
+        // Ok(())
+
+        // First update actual data.
+        unsafe {
+            // Check if Receiver has not claimed previous data.
+            // This should not happen.
+            if let Some(_) = *self.inner.data.get() {
+                return Err(SendError::UnreceivedValue);
+            }
+
+            *self.inner.data.get() = Some(data);
         }
 
-        *value = Some(data);
+        // Then indicate data has been sent.
+        self.inner.has_data.store(true, Ordering::SeqCst);
 
         Ok(())
     }
 }
 
-pub struct Receiver {
-    inner: Arc<Mutex<Option<TaskData>>>,
+pub struct Receiver<T> {
+    inner: Arc<Inner<T>>,
 }
 
-impl Receiver {
+impl<T> Receiver<T> {
     #[inline]
-    pub fn try_receive(&self) -> Result<TaskData, TryReceiveError> {
-        let mut value = self.inner.lock().unwrap();
+    pub fn try_receive(&self) -> Result<T, TryReceiveError> {
+        // let mut value = self.inner.lock().unwrap();
 
-        match (*value).take() {
-            Some(x) => Ok(x),
-            None => Err(TryReceiveError::Empty),
+        // match (*value).take() {
+        //     Some(x) => Ok(x),
+        //     None => Err(TryReceiveError::Empty),
+        // }
+
+        // First check to see if any data has been sent.
+        match self.inner.has_data.compare_and_swap(true, false, Ordering::SeqCst) {
+            true => {
+                // If so, retrieve the data and unwrap it from its Option container.
+                // Invariant: *self.inner.data.get() == Some(_) if self.inner.has_data == true
+                unsafe {
+                    Ok((*self.inner.data.get()).take().unwrap())
+                }
+            },
+            false => {
+                Err(TryReceiveError::Empty)
+            },
         }
     }
 
-    pub fn receive(&self) -> TaskData {
+    pub fn receive(&self) -> T {
         loop {
             if let Ok(data) = self.try_receive() {
                 return data;
@@ -55,6 +88,14 @@ impl Receiver {
         }
     }
 }
+
+struct Inner<T> {
+    has_data: AtomicBool,
+    data: UnsafeCell<Option<T>>,
+}
+
+unsafe impl<T> Send for Inner<T> {}
+unsafe impl<T> Sync for Inner<T> {}
 
 #[derive(Debug)]
 pub enum SendError {
@@ -71,14 +112,17 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread;
+    
+    use super::super::super::super::task::Task;
+    use super::super::super::task::Data as TaskData;
     
     use super::*;
-    use super::super::super::super::task::Task;
 
     #[test]
     fn test_creation() {
         #[allow(unused_variables)]
-        let (tx, rx) = channel();
+        let (tx, rx) = channel::<TaskData>();
     }
 
     #[test]
@@ -88,10 +132,17 @@ mod tests {
 
         tx.send(TaskData::NoTasks).unwrap();
 
-        match *tx.inner.lock().unwrap() {
-            Some(TaskData::NoTasks) => {},
-            _ => { assert!(false); },
-        };
+        // match *tx.inner.lock().unwrap() {
+        //     Some(TaskData::NoTasks) => {},
+        //     _ => { assert!(false); },
+        // };
+        unsafe {
+            // match (*tx.inner.data.get()).take() {
+            match *tx.inner.data.get() {
+                Some(TaskData::NoTasks) => {},
+                _ => { assert!(false); },
+            }
+        }
     }
 
     #[test]
@@ -102,10 +153,17 @@ mod tests {
         let data = TaskData::OneTask(Box::new(|| { println!("Hello world!"); }));
         tx.send(data).unwrap();
 
-        match *tx.inner.lock().unwrap() {
-            Some(TaskData::OneTask(_)) => {},
-            _ => { assert!(false); },
-        };
+        // match *tx.inner.lock().unwrap() {
+        //     Some(TaskData::OneTask(_)) => {},
+        //     _ => { assert!(false); },
+        // };
+        unsafe {
+            // match (*tx.inner.data.get()).take() {
+            match *tx.inner.data.get() {
+                Some(TaskData::OneTask(_)) => {},
+                _ => { assert!(false); },
+            }
+        }
     }
 
     #[test]
@@ -121,10 +179,17 @@ mod tests {
 
         tx.send(TaskData::ManyTasks(data)).unwrap();
 
-        match *tx.inner.lock().unwrap() {
-            Some(TaskData::ManyTasks(_)) => {},
-            _ => { assert!(false); },
-        };
+        // match *tx.inner.lock().unwrap() {
+        //     Some(TaskData::ManyTasks(_)) => {},
+        //     _ => { assert!(false); },
+        // };
+        unsafe {
+            // match (*tx.inner.data.get()).take() {
+            match *tx.inner.data.get() {
+                Some(TaskData::ManyTasks(_)) => {},
+                _ => { assert!(false); },
+            }
+        }
     }
     
     #[test]
@@ -151,10 +216,17 @@ mod tests {
             _ => { assert!(false); },
         };
 
-        match *rx.inner.lock().unwrap() {
-            None => {},
-            _ => { assert!(false); },
-        };
+        // match *rx.inner.lock().unwrap() {
+        //     None => {},
+        //     _ => { assert!(false); },
+        // };
+        unsafe {
+            // match (*tx.inner.data.get()).take() {
+            match *tx.inner.data.get() {
+                None => {},
+                _ => { assert!(false); },
+            }
+        }
     }
 
     #[test]
@@ -179,10 +251,17 @@ mod tests {
 
         assert_eq!(var.load(Ordering::SeqCst), 1);
 
-        match *rx.inner.lock().unwrap() {
-            None => {},
-            _ => { assert!(false); },
-        };
+        // match *rx.inner.lock().unwrap() {
+        //     None => {},
+        //     _ => { assert!(false); },
+        // };
+        unsafe {
+            // match (*tx.inner.data.get()).take() {
+            match *tx.inner.data.get() {
+                None => {},
+                _ => { assert!(false); },
+            }
+        }
     }
 
     #[test]
@@ -219,16 +298,23 @@ mod tests {
 
         assert_eq!(var.load(Ordering::SeqCst), 2);
 
-        match *rx.inner.lock().unwrap() {
-            None => {},
-            _ => { assert!(false); },
-        };
+        // match *rx.inner.lock().unwrap() {
+        //     None => {},
+        //     _ => { assert!(false); },
+        // };
+        unsafe {
+            // match (*tx.inner.data.get()).take() {
+            match *tx.inner.data.get() {
+                None => {},
+                _ => { assert!(false); },
+            }
+        }
     }
     
     #[test]
     fn test_receiver_try_receive_empty() {
         #[allow(unused_variables)]
-        let (tx, rx) = channel();
+        let (tx, rx) = channel::<TaskData>();
 
         match rx.try_receive() {
             Err(TryReceiveError::Empty) => {},
@@ -247,5 +333,55 @@ mod tests {
             TaskData::NoTasks => {},
             _ => { assert!(false); },
         };
+    }
+
+    #[test]
+    fn test_send_receive_threaded() {
+        let (tx, rx) = channel();
+
+        let var = Arc::new(AtomicUsize::new(0));
+        let var2 = var.clone();
+
+        tx.send(TaskData::OneTask(Box::new(move || {
+            var2.fetch_add(1, Ordering::SeqCst);
+        }))).unwrap();
+        
+        let handle = thread::spawn(move || {
+            match rx.receive() {
+                TaskData::OneTask(task) => {
+                    task.call_box();
+                },
+                _ => { assert!(false); },
+            }
+        });
+
+        handle.join().unwrap();
+
+        assert_eq!(var.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_send_threaded_receive() {
+        let (tx, rx) = channel();
+
+        let var = Arc::new(AtomicUsize::new(0));
+        let var2 = var.clone();
+        
+        let handle = thread::spawn(move || {
+            tx.send(TaskData::OneTask(Box::new(move || {
+                var2.fetch_add(1, Ordering::SeqCst);
+            }))).unwrap();
+        });
+
+        match rx.receive() {
+            TaskData::OneTask(task) => {
+                task.call_box();
+            },
+            _ => { assert!(false); },
+        }
+
+        handle.join().unwrap();
+
+        assert_eq!(var.load(Ordering::SeqCst), 1);
     }
 }

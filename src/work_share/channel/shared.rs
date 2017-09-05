@@ -1,15 +1,15 @@
 use super::task as tc;
 use super::super::util;
 
-pub fn make_shared_channels(nt: usize)
-                        -> (Vec<Vec<tc::Sender>>,
-                            Vec<Vec<tc::Receiver>>)
+pub fn make_shared_channels<T>(nt: usize)
+                        -> (Vec<Vec<tc::Sender<T>>>,
+                            Vec<Vec<tc::Receiver<T>>>)
 {
     let ntsq = nt * nt;
     
     // Model the channels as several NxN matrices.
-    let mut tasks_tx = Vec::<Option<tc::Sender>>::with_capacity(ntsq);
-    let mut tasks_rx = Vec::<Option<tc::Receiver>>::with_capacity(ntsq);
+    let mut tasks_tx = Vec::<Option<tc::Sender<T>>>::with_capacity(ntsq);
+    let mut tasks_rx = Vec::<Option<tc::Receiver<T>>>::with_capacity(ntsq);
     
     for n in 0..ntsq {
         match util::is_diagonal(n, nt) {
@@ -41,13 +41,15 @@ pub fn make_shared_channels(nt: usize)
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::task::Data as TaskData;
+    
     use super::*;
 
     static NT: usize = 3;
 
     #[test]
     fn test_make_shared_channels() {
-        let (tasks_tx, tasks_rx) = make_shared_channels(NT);
+        let (tasks_tx, tasks_rx) = make_shared_channels::<TaskData>(NT);
         assert_eq!(tasks_tx.len(), NT);
         assert_eq!(tasks_rx.len(), NT);
         
