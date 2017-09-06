@@ -32,7 +32,8 @@ pub struct Worker {
     wait_strategy: ReceiverWaitStrategy,
     rng: RefCell<rand::XorShiftRng>,
     receiver_timeout: Duration,
-    tasks: RefCell<VecDeque<Task>>,
+    // tasks: RefCell<VecDeque<Task>>,
+    tasks: RefCell<VecDeque<Box<Task>>>,
     channel_data: Data,
 }
 
@@ -189,7 +190,8 @@ impl WorkerTrait for Worker {
     }
 
     #[inline]
-    fn add_task(&self, task: Task) {
+    // fn add_task(&self, task: Task) {
+    fn add_task(&self, task: Box<Task>) {
         self.tasks.borrow_mut().push_back(task);
     }
 }
@@ -259,9 +261,9 @@ mod tests {
         worker1.add_tasks(TaskData::OneTask(Box::new(|| { println!("Hello World!");})));
         assert_eq!(worker1.tasks.borrow_mut().len(), 1);
 
-        let mut vd = VecDeque::new();
-        vd.push_back(Box::new(|| { println!("Hello World!"); }) as Task);
-        vd.push_back(Box::new(|| { println!("Hello Again!"); }) as Task);
+        let mut vd: VecDeque<Box<Task>> = VecDeque::new();
+        vd.push_back(Box::new(|| { println!("Hello World!"); }));
+        vd.push_back(Box::new(|| { println!("Hello Again!"); }));
         worker2.add_tasks(TaskData::ManyTasks(vd));
         assert_eq!(worker2.tasks.borrow_mut().len(), 2);
     }
@@ -299,19 +301,19 @@ mod tests {
         let var3 = var.clone();
         let var4 = var.clone();
 
-        let mut vd = VecDeque::new();
+        let mut vd: VecDeque<Box<Task>> = VecDeque::new();
         vd.push_back(Box::new(move || {
             var1.fetch_add(1, Ordering::SeqCst);
-        }) as Task);
+        }));
         vd.push_back(Box::new(move || {
             var2.fetch_add(2, Ordering::SeqCst);
-        }) as Task);
+        }));
         vd.push_back(Box::new(move || {
             var3.fetch_add(3, Ordering::SeqCst);
-        }) as Task);
+        }));
         vd.push_back(Box::new(move || {
             var4.fetch_add(4, Ordering::SeqCst);
-        }) as Task);
+        }));
         worker1.add_tasks(TaskData::ManyTasks(vd));
 
         worker1.share(&worker1.channel_data.channels[0]);
@@ -406,16 +408,16 @@ mod tests {
         let var3 = var.clone();
         let var4 = var.clone();
 
-        let mut vd = VecDeque::new();
+        let mut vd: VecDeque<Box<Task>> = VecDeque::new();
         vd.push_back(Box::new(move || {
             var1.fetch_add(1, Ordering::SeqCst);
-        }) as Task);
+        }));
         vd.push_back(Box::new(move || {
             var2.fetch_add(2, Ordering::SeqCst);
-        }) as Task);
+        }));
         vd.push_back(Box::new(move || {
             var3.fetch_add(3, Ordering::SeqCst);
-        }) as Task);
+        }));
         worker1.add_tasks(TaskData::ManyTasks(vd));
 
         // Execute 1st task.

@@ -145,7 +145,7 @@ mod tests {
 
         let data1 = Box::new(|| { println!("Hello world!"); });
         let data2 = Box::new(|| { println!("Hello again!"); });
-        let mut data = VecDeque::<Task>::new();
+        let mut data = VecDeque::<Box<Task>>::new();
         data.push_back(data1);
         data.push_back(data2);
 
@@ -231,12 +231,12 @@ mod tests {
 
         let task1 = Box::new(move || {
             var1.fetch_add(1, Ordering::SeqCst);
-        }) as Task;
+        });
         let task2 = Box::new(move || {
             var2.fetch_add(1, Ordering::SeqCst);
-        }) as Task;
+        });
 
-        let mut vd = VecDeque::new();
+        let mut vd: VecDeque<Box<Task>> = VecDeque::new();
         vd.push_back(task1);
         vd.push_back(task2);
 

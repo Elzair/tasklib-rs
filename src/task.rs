@@ -12,5 +12,5 @@ impl<F: FnOnce()> FnBox for F {
     }
 }
 
-pub type Task = Box<FnBox + Send + 'static>;
-
+// pub type Task = Box<FnBox + Send + 'static>;
+pub type Task = FnBox + Send + 'static;
