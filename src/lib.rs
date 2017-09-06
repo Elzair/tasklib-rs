@@ -9,7 +9,7 @@ pub mod task;
 pub mod worker;
 
 pub mod work_share;
-// pub mod work_take;
+pub mod work_take;
 
 #[derive(Clone, Copy)]
 pub enum ShareStrategy {

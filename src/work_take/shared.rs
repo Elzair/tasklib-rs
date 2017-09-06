@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::super::task::Task;
 
 pub struct Data {
-    queues: Vec<Mutex<VecDeque<Task>>>,
+    queues: Vec<Mutex<VecDeque<Box<Task>>>>,
     exit_flag: AtomicBool,
     exit_barrier: Barrier,
     run_all_tasks_before_exit: AtomicBool,
@@ -17,7 +17,7 @@ impl Data {
         #[allow(unused_variables)]
         let queues = (0..n).into_iter()
             .map(|nn| {
-                Mutex::new(VecDeque::<Task>::with_capacity(capacity))
+                Mutex::new(VecDeque::<Box<Task>>::with_capacity(capacity))
             }).collect::<Vec<_>>();
 
         Data {
@@ -60,14 +60,15 @@ impl Data {
     }
 
     #[inline]
-    pub fn add_task(&self, index: usize, task: Task) {
+    pub fn add_task(&self, index: usize, task: Box<Task>) {
         let mut guard = self.queues[index].lock().unwrap();
 
         guard.push_back(task);
     }
 
     #[inline]
-    pub fn try_get_task(&self, index: usize) -> Result<Task, TryGetTaskError> {
+    pub fn try_get_task(&self, index: usize) -> Result<Box<Task>,
+                                                       TryGetTaskError> {
         match self.queues[index].try_lock() {
             Ok(mut guard) => {
                 match guard.pop_front() {

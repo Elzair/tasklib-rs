@@ -106,7 +106,7 @@ impl WorkerTrait for Worker {
     }
 
     #[inline]
-    fn add_task(&self, task: Task) {
+    fn add_task(&self, task: Box<Task>) {
         self.shared_data.add_task(self.index, task);
     }
 }
@@ -159,7 +159,7 @@ mod tests {
 
         worker1.add_task(Box::new(move || {
             var2.fetch_add(1, Ordering::SeqCst);
-        }) as Task);
+        }));
 
         worker1.run_once();
 
