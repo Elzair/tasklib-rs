@@ -4,5 +4,6 @@ version = "0.1.0"
 authors = ["Philip Woods <elzairthesorcerer@gmail.com>"]
 
 [dependencies]
-rand                   = "^0.3"
-itertools              = "^0.6"
+rand      = "^0.3"
+itertools = "^0.6"
+reqchan   = "^0.5"
