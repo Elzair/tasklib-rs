@@ -3,8 +3,6 @@ extern crate itertools;
 extern crate rand;
 extern crate reqchan;
 
-use std::time::Duration;
-
 mod rng;
 pub mod task;
 pub mod worker;

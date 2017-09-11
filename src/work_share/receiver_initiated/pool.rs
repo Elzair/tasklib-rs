@@ -259,12 +259,17 @@ mod tests {
         assert_eq!(channels.len(), 3);
 
         let (reqs2, resps2) = channels.pop().unwrap();
+        
         assert_eq!(reqs2.len(), 2);
         assert_eq!(resps2.len(), 2);
+        
         let (reqs1, resps1) = channels.pop().unwrap();
+        
         assert_eq!(reqs1.len(), 2);
         assert_eq!(resps1.len(), 2);
+        
         let (reqs0, resps0) = channels.pop().unwrap();
+        
         assert_eq!(reqs0.len(), 2);
         assert_eq!(resps0.len(), 2);
 
