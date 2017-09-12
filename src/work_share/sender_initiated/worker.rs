@@ -104,6 +104,7 @@ impl Worker {
         loop {
             // See if we have received any tasks.
             if let Ok(task_data) = contract.try_receive() {
+                self.add_tasks(task_data);
                 break;
             }
 
@@ -204,273 +205,300 @@ impl WorkerTrait for Worker {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use std::collections::VecDeque;
-//     use std::sync::Arc;
-//     use std::sync::atomic::{AtomicUsize, Ordering};
-//     use std::thread;
-//     use std::time::Duration;
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Barrier};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::thread;
+    use std::time::Duration;
+
+    use reqchan;
     
-//     use super::super::super::super::{ShareStrategy, ReceiverWaitStrategy};
-//     use super::super::channel::make_channels;
-//     use super::*;
+    use super::super::super::{ShareStrategy, ReceiverWaitStrategy, TaskData};
+    use super::*;
 
-//     fn helper(share: ShareStrategy,
-//               receiver_timeout: Duration)
-//               -> (Worker, Worker) {
-//         let mut channels = make_channels(2);
-//         let shared_data = Arc::new(SharedData::new(2));
+    fn helper(share: ShareStrategy,
+              receiver_timeout: Duration)
+              -> (Worker, Worker) {
+        let (rqst0, resps0) = reqchan::channel::<TaskData>();
+        let (rqst1, resps1) = reqchan::channel::<TaskData>();
+
+        let shared_data = Arc::new(SharedData::new(2));
         
-//         let worker1 = Worker::new(Config {
-//             index: 0,
-//             shared_data: shared_data.clone(),
-//             task_capacity: 16,
-//             share_strategy: share,
-//             wait_strategy: ReceiverWaitStrategy::Yield,
-//             receiver_timeout: receiver_timeout,
-//             channel_data: channels.remove(0),
-//         });
+        let worker1 = Worker::new(Config {
+            index: 0,
+            shared_data: shared_data.clone(),
+            task_capacity: 16,
+            share_strategy: share,
+            wait_strategy: ReceiverWaitStrategy::Yield,
+            receiver_timeout: receiver_timeout,
+            requester: rqst0,
+            responders: vec![resps1],
+        });
         
-//         let worker2 = Worker::new(Config {
-//             index: 1,
-//             shared_data: shared_data.clone(),
-//             task_capacity: 16,
-//             share_strategy: share,
-//             wait_strategy: ReceiverWaitStrategy::Yield,
-//             receiver_timeout: receiver_timeout,
-//             channel_data: channels.remove(0),
-//         });
+        let worker2 = Worker::new(Config {
+            index: 1,
+            shared_data: shared_data.clone(),
+            task_capacity: 16,
+            share_strategy: share,
+            wait_strategy: ReceiverWaitStrategy::Yield,
+            receiver_timeout: receiver_timeout,
+            requester: rqst1,
+            responders: vec![resps0],
+        });
 
-//         (worker1, worker2)
-//     }
+        (worker1, worker2)
+    }
 
-//     #[test]
-//     fn test_make_worker() {
-//         #[allow(unused_variables)]
-//         let (worker1, worker2) = helper(ShareStrategy::One,
-//                                         Duration::new(1, 0));
-//     }
+    #[test]
+    fn test_make_worker() {
+        #[allow(unused_variables)]
+        let (worker1, worker2) = helper(ShareStrategy::One,
+                                        Duration::new(1, 0));
+    }
 
-//     #[test]
-//     fn test_worker_add_task() {
-//         let (worker1, _) = helper(ShareStrategy::One,
-//                                   Duration::new(1, 0));
+    #[test]
+    fn test_worker_add_task() {
+        let (worker1, _) = helper(ShareStrategy::One,
+                                  Duration::new(1, 0));
 
-//         worker1.add_tasks(TaskData::OneTask(Box::new(|| { println!("Hello World!");})));
-//         assert_eq!(worker1.tasks.borrow_mut().len(), 1);
-//     }
+        worker1.add_tasks(TaskData::OneTask(Box::new(|| { println!("Hello World!");})));
+        assert_eq!(worker1.tasks.borrow_mut().len(), 1);
+    }
 
-//     #[test]
-//     fn test_worker_add_tasks() {
-//         let (worker1, worker2) = helper(ShareStrategy::One,
-//                                         Duration::new(1, 0));
+    #[test]
+    fn test_worker_add_tasks() {
+        let (worker1, worker2) = helper(ShareStrategy::One,
+                                        Duration::new(1, 0));
 
-//         worker1.add_tasks(TaskData::OneTask(Box::new(|| { println!("Hello World!");})));
-//         assert_eq!(worker1.tasks.borrow_mut().len(), 1);
+        worker1.add_tasks(TaskData::OneTask(Box::new(|| { println!("Hello World!");})));
+        assert_eq!(worker1.tasks.borrow_mut().len(), 1);
 
-//         let mut vd: VecDeque<Box<Task>> = VecDeque::new();
-//         vd.push_back(Box::new(|| { println!("Hello World!"); }));
-//         vd.push_back(Box::new(|| { println!("Hello Again!"); }));
-//         worker2.add_tasks(TaskData::ManyTasks(vd));
-//         assert_eq!(worker2.tasks.borrow_mut().len(), 2);
-//     }
+        let mut vd: VecDeque<Box<Task>> = VecDeque::new();
+        vd.push_back(Box::new(|| { println!("Hello World!"); }));
+        vd.push_back(Box::new(|| { println!("Hello Again!"); }));
+        worker2.add_tasks(TaskData::ManyTasks(vd));
+        assert_eq!(worker2.tasks.borrow_mut().len(), 2);
+    }
 
-//     #[test]
-//     fn test_worker_share_one() {
-//         let (worker1, worker2) = helper(ShareStrategy::One,
-//                                         Duration::new(1, 0));
+    #[test]
+    fn test_worker_share_one() {
+        let (worker1, worker2) = helper(ShareStrategy::One,
+                                        Duration::new(1, 0));
 
-//         let var = Arc::new(AtomicUsize::new(0));
-//         let var1 = var.clone();
+        let var = Arc::new(AtomicUsize::new(0));
+        let var1 = var.clone();
 
-//         worker1.add_tasks(TaskData::OneTask(Box::new(move || {
-//             var1.fetch_add(1, Ordering::SeqCst);
-//         })));
+        worker1.add_tasks(TaskData::OneTask(Box::new(move || {
+            var1.fetch_add(1, Ordering::SeqCst);
+        })));
 
-//         worker1.share(&worker1.channel_data.channels[0]);
-//         assert_eq!(worker1.tasks.borrow().len(), 0);
+        let mut reqcon = worker2.requester.try_request().unwrap();
 
-//         worker2.add_tasks(worker2.channel_data.channels[0].task_get.receive());
-//         assert_eq!(worker2.tasks.borrow().len(), 1);
-
-//         worker2.tasks.borrow_mut().pop_front().unwrap().call_box();
-//         assert_eq!(var.load(Ordering::SeqCst), 1);
-//     }
-
-//     #[test]
-//     fn test_worker_share_half() {
-//         let (worker1, worker2) = helper(ShareStrategy::Half,
-//                                         Duration::new(1, 0));
-
-//         let var = Arc::new(AtomicUsize::new(0));
-//         let var1 = var.clone();
-//         let var2 = var.clone();
-//         let var3 = var.clone();
-//         let var4 = var.clone();
-
-//         let mut vd: VecDeque<Box<Task>> = VecDeque::new();
-//         vd.push_back(Box::new(move || {
-//             var1.fetch_add(1, Ordering::SeqCst);
-//         }));
-//         vd.push_back(Box::new(move || {
-//             var2.fetch_add(2, Ordering::SeqCst);
-//         }));
-//         vd.push_back(Box::new(move || {
-//             var3.fetch_add(3, Ordering::SeqCst);
-//         }));
-//         vd.push_back(Box::new(move || {
-//             var4.fetch_add(4, Ordering::SeqCst);
-//         }));
-//         worker1.add_tasks(TaskData::ManyTasks(vd));
-
-//         worker1.share(&worker1.channel_data.channels[0]);
-//         assert_eq!(worker1.tasks.borrow().len(), 2);
-
-//         worker2.add_tasks(worker2.channel_data.channels[0].task_get.receive());
-//         assert_eq!(worker2.tasks.borrow().len(), 2);
-
-//         worker2.tasks.borrow_mut().pop_front().unwrap().call_box();
-//         assert_eq!(var.load(Ordering::SeqCst), 3);
-//         worker2.tasks.borrow_mut().pop_front().unwrap().call_box();
-//         assert_eq!(var.load(Ordering::SeqCst), 7);
-//     }
-
-//     #[test]
-//     fn test_worker_acquire_tasks() {
-//         let (worker1, worker2) = helper(ShareStrategy::One,
-//                                         Duration::new(1, 0));
-
-//         let var = Arc::new(AtomicUsize::new(0));
-//         let var1 = var.clone();
-
-//         worker1.add_tasks(TaskData::OneTask(Box::new(move || {
-//             var1.fetch_add(1, Ordering::SeqCst);
-//         })));
-
-//         let handle = thread::spawn(move || {
-//             worker2.acquire_tasks();
-
-//             assert_eq!(worker2.tasks.borrow().len(), 1);
-
-//             worker2.tasks.borrow_mut().pop_front().unwrap().call_box();
-//             assert_eq!(var.load(Ordering::SeqCst), 1);
-//         });
-
-//         // Simulate sharing tasks
-//         let mut done = false;
-
-//         while !done {
-//             let res = worker1.channel_data.channels[0].request_get.receive();
-
-//             if res {
-//                 worker1.share(&worker1.channel_data.channels[0]);
-//                 done = true;
-//             }
-//         }
-
-//         handle.join().unwrap();
-//     }
-
-//     #[test]
-//     fn test_worker_acquire_tasks_timeout() {
-//         #[allow(unused_variables)]
-//         let (worker1, worker2) = helper(ShareStrategy::One,
-//                                         Duration::new(1, 0));
-
-//         worker1.acquire_tasks();
-//     }
-
-//     #[test]
-//     fn test_worker_process_requests() {
-//         let (worker1, worker2) = helper(ShareStrategy::One,
-//                                         Duration::new(1, 0));
-
-//         let var = Arc::new(AtomicUsize::new(0));
-//         let var1 = var.clone();
-
-//         worker1.add_tasks(TaskData::OneTask(Box::new(move || {
-//             var1.fetch_add(1, Ordering::SeqCst);
-//         })));
-
-//         // Simulate requesting tasks.
-//         worker2.channel_data.request_send.send().unwrap();
-
-//         worker1.process_requests();
-
-//         // Simulate getting and running tasks.
-//         worker2.add_tasks(worker2.channel_data.channels[0].task_get.receive());
-
-//         worker2.tasks.borrow_mut().pop_front().unwrap().call_box();
-//         assert_eq!(var.load(Ordering::SeqCst), 1);
-//     }
-
-//     #[test]
-//     fn test_worker_run_once() {
-//         let (worker1, worker2) = helper(ShareStrategy::One,
-//                                         Duration::new(5, 0));
-
-//         let var = Arc::new(AtomicUsize::new(0));
-//         let var1 = var.clone();
-//         let var2 = var.clone();
-//         let var3 = var.clone();
-//         let var4 = var.clone();
-
-//         let mut vd: VecDeque<Box<Task>> = VecDeque::new();
-//         vd.push_back(Box::new(move || {
-//             var1.fetch_add(1, Ordering::SeqCst);
-//         }));
-//         vd.push_back(Box::new(move || {
-//             var2.fetch_add(2, Ordering::SeqCst);
-//         }));
-//         vd.push_back(Box::new(move || {
-//             var3.fetch_add(3, Ordering::SeqCst);
-//         }));
-//         worker1.add_tasks(TaskData::ManyTasks(vd));
-
-//         // Execute 1st task.
-//         worker1.run_once();
+        worker1.share(&worker1.responders[0]);
         
-//         assert_eq!(worker1.tasks.borrow().len(), 2);
-//         assert_eq!(var.load(Ordering::SeqCst), 1);
+        assert_eq!(worker1.tasks.borrow().len(), 0);
 
-//         let handle = thread::spawn(move || {
-//             // Get 3rd task.
-//             worker2.run_once();
+        if let Ok(TaskData::OneTask(task)) = reqcon.try_receive() {
+            task.call_box();
+        }
+        else { assert!(false); }
 
-//             assert_eq!(worker2.tasks.borrow().len(), 1);
-//             assert_eq!(var4.load(Ordering::SeqCst), 3);
+        assert_eq!(var.load(Ordering::SeqCst), 1);
+    }
 
-//             // Execute 3rd task.
-//             worker2.run_once();
-//         });
+    #[test]
+    fn test_worker_share_half() {
+        let (worker1, worker2) = helper(ShareStrategy::Half,
+                                        Duration::new(1, 0));
 
-//         // Execute 2nd task and share 3rd task.
-//         thread::sleep(Duration::new(2, 0));
-//         worker1.run_once();
+        let var = Arc::new(AtomicUsize::new(0));
+        let var1 = var.clone();
+        let var2 = var.clone();
+        let var3 = var.clone();
+        let var4 = var.clone();
+
+        let mut vd: VecDeque<Box<Task>> = VecDeque::new();
+        vd.push_back(Box::new(move || {
+            var1.fetch_add(1, Ordering::SeqCst);
+        }));
+        vd.push_back(Box::new(move || {
+            var2.fetch_add(2, Ordering::SeqCst);
+        }));
+        vd.push_back(Box::new(move || {
+            var3.fetch_add(3, Ordering::SeqCst);
+        }));
+        vd.push_back(Box::new(move || {
+            var4.fetch_add(4, Ordering::SeqCst);
+        }));
+        worker1.add_tasks(TaskData::ManyTasks(vd));
+
+        let mut reqcon = worker2.requester.try_request().unwrap();
+
+        worker1.share(&worker1.responders[0]);
+
+        assert_eq!(worker1.tasks.borrow().len(), 2);
+
+        if let Ok(TaskData::ManyTasks(mut tasks)) = reqcon.try_receive() {
+            tasks.pop_front().unwrap().call_box();
+
+            assert_eq!(var.load(Ordering::SeqCst), 3);
+
+            tasks.pop_front().unwrap().call_box();
+
+            assert_eq!(var.load(Ordering::SeqCst), 7);
+        }
+        else { assert!(false); }
+    }
+
+    #[test]
+    fn test_worker_acquire_tasks() {
+        let (worker1, worker2) = helper(ShareStrategy::One,
+                                        Duration::new(1, 0));
+
+        let stop1 = Arc::new(AtomicBool::new(false));
+        let stop2 = stop1.clone();
+
+        let var = Arc::new(AtomicUsize::new(0));
+        let var1 = var.clone();
+
+        let mut tasks: VecDeque<Box<Task>> = VecDeque::new();
+        tasks.push_back(Box::new(move || {
+            var1.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        let handle = thread::spawn(move || {
+            worker2.acquire_tasks();
+
+            assert_eq!(worker2.tasks.borrow().len(), 1);
+
+            worker2.tasks.borrow_mut().pop_front().unwrap().call_box();
+
+            stop2.store(true, Ordering::SeqCst);
+        });
+
+        while !stop1.load(Ordering::SeqCst) {
+            if let Ok(respcon) = worker1.responders[0].try_respond() {
+                respcon.send(TaskData::OneTask(tasks.pop_front().unwrap()));
+            }
+        }
+
+        handle.join().unwrap();
+
+        assert_eq!(var.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_worker_acquire_tasks_timeout() {
+        #[allow(unused_variables)]
+        let (worker1, worker2) = helper(ShareStrategy::One,
+                                        Duration::new(1, 0));
+
+        worker1.acquire_tasks();
+    }
+
+    #[test]
+    fn test_worker_process_requests() {
+        let (worker1, worker2) = helper(ShareStrategy::One,
+                                        Duration::new(1, 0));
+
+        let stop1 = Arc::new(AtomicBool::new(false));
+        let stop2 = stop1.clone();
+
+        let var = Arc::new(AtomicUsize::new(0));
+        let var1 = var.clone();
+
+        worker1.add_tasks(TaskData::OneTask(Box::new(move || {
+            var1.fetch_add(1, Ordering::SeqCst);
+        })));
+
+        let handle = thread::spawn(move || {
+            let mut reqcon = worker2.requester.try_request().unwrap();
+
+            while !stop2.load(Ordering::SeqCst) {
+                if let Ok(TaskData::OneTask(task)) = reqcon.try_receive() {
+                    task.call_box();
+                    stop2.store(true, Ordering::SeqCst);
+                }
+            }
+        });
+
+        while !stop1.load(Ordering::SeqCst) {
+            worker1.process_requests();
+        }
+
+        handle.join().unwrap();
+
+        assert_eq!(var.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_worker_run_once() {
+        let (worker1, worker2) = helper(ShareStrategy::One,
+                                        Duration::new(5, 0));
+
+        let var = Arc::new(AtomicUsize::new(0));
+        let var1 = var.clone();
+        let var2 = var.clone();
+        let var3 = var.clone();
+        let var4 = var.clone();
+
+        let mut vd: VecDeque<Box<Task>> = VecDeque::new();
+        vd.push_back(Box::new(move || {
+            var1.fetch_add(1, Ordering::SeqCst);
+        }));
+        vd.push_back(Box::new(move || {
+            var2.fetch_add(2, Ordering::SeqCst);
+        }));
+        vd.push_back(Box::new(move || {
+            var3.fetch_add(3, Ordering::SeqCst);
+        }));
+        worker1.add_tasks(TaskData::ManyTasks(vd));
+
+        // Execute 1st task.
+        worker1.run_once();
         
-//         assert_eq!(worker1.tasks.borrow().len(), 0);
+        assert_eq!(worker1.tasks.borrow().len(), 2);
+        assert_eq!(var.load(Ordering::SeqCst), 1);
 
-//         // Wait until thread2 exits.
-//         handle.join().unwrap();
+        let handle = thread::spawn(move || {
+            // Get 3rd task.
+            worker2.run_once();
 
-//         assert_eq!(var.load(Ordering::SeqCst), 6);
-//     }
+            assert_eq!(worker2.tasks.borrow().len(), 1);
+            assert_eq!(var4.load(Ordering::SeqCst), 3);
 
-//     #[test]
-//     fn test_worker_run_signal_exit() {
-//         let (worker1, worker2) = helper(ShareStrategy::One,
-//                                         Duration::new(1, 0));
+            // Execute 3rd task.
+            worker2.run_once();
+        });
 
-
-//         let handle = thread::spawn(move || {
-//             worker2.run();
-//         });
+        // Execute 2nd task and share 3rd task.
+        thread::sleep(Duration::new(2, 0));
+        worker1.run_once();
         
-//         thread::sleep(Duration::new(0, 100));
-//         worker1.signal_exit();
-//         worker1.shared_data.wait_on_exit();
+        assert_eq!(worker1.tasks.borrow().len(), 0);
 
-//         handle.join().unwrap();
-//     }
-// }
+        // Wait until thread2 exits.
+        handle.join().unwrap();
+
+        assert_eq!(var.load(Ordering::SeqCst), 6);
+    }
+
+    #[test]
+    fn test_worker_run_signal_exit() {
+        let (worker1, worker2) = helper(ShareStrategy::One,
+                                        Duration::new(1, 0));
+
+
+        let handle = thread::spawn(move || {
+            worker2.run();
+        });
+        
+        thread::sleep(Duration::new(0, 100));
+        worker1.signal_exit();
+        worker1.shared_data.wait_on_exit();
+
+        handle.join().unwrap();
+    }
+}

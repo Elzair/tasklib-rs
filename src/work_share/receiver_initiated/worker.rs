@@ -137,20 +137,19 @@ impl Worker {
 
     fn acquire_tasks(&self) {
         let start_time = Instant::now();
-        let mut done = false;
 
-        while !done {
+        loop {
             // Pick a random channel to request data.
             let requester = &self.requesters[self.rand_index()];
             
             if let Some(task_data) = self.try_get_tasks(requester) {
                 self.add_tasks(task_data);
-                done = true;
+                break;
             }
 
             // Stop trying to acquire tasks if we time out.
             if Instant::now().duration_since(start_time) >= self.receiver_timeout {
-                done = true;
+                break;
             }
         }
     }
@@ -332,11 +331,10 @@ mod tests {
 
         assert_eq!(worker1.tasks.borrow().len(), 0);
 
-        worker2.add_tasks(reqcon.try_receive().unwrap());
-
-        assert_eq!(worker2.tasks.borrow().len(), 1);
-
-        worker2.tasks.borrow_mut().pop_front().unwrap().call_box();
+        if let Ok(TaskData::OneTask(task)) = reqcon.try_receive() {
+            task.call_box();
+        }
+        else { assert!(false); }
 
         assert_eq!(var.load(Ordering::SeqCst), 1);
     }
@@ -371,19 +369,19 @@ mod tests {
         let mut reqcon = worker2.requesters[0].try_request().unwrap();
 
         worker1.share(&worker1.responders[0]);
+
         assert_eq!(worker1.tasks.borrow().len(), 2);
 
-        worker2.add_tasks(reqcon.try_receive().unwrap());
+        if let Ok(TaskData::ManyTasks(mut tasks)) = reqcon.try_receive() {
+            tasks.pop_front().unwrap().call_box();
 
-        assert_eq!(worker2.tasks.borrow().len(), 2);
+            assert_eq!(var.load(Ordering::SeqCst), 3);
 
-        worker2.tasks.borrow_mut().pop_front().unwrap().call_box();
+            tasks.pop_front().unwrap().call_box();
 
-        assert_eq!(var.load(Ordering::SeqCst), 3);
-
-        worker2.tasks.borrow_mut().pop_front().unwrap().call_box();
-
-        assert_eq!(var.load(Ordering::SeqCst), 7);
+            assert_eq!(var.load(Ordering::SeqCst), 7);
+        }
+        else { assert!(false); }
     }
 
     #[test]
@@ -395,37 +393,32 @@ mod tests {
         let stop1 = Arc::new(AtomicBool::new(false));
         let stop2 = stop1.clone();
 
-        let barrier1 = Arc::new(Barrier::new(2));
-        let barrier2 = barrier1.clone();
-
         let var = Arc::new(AtomicUsize::new(0));
         let var1 = var.clone();
 
         let handle = thread::spawn(move || {
-            worker1.add_tasks(TaskData::OneTask(Box::new(move || {
+            let mut tasks: VecDeque<Box<Task>> = VecDeque::new();
+            tasks.push_back(Box::new(move || {
                 var1.fetch_add(1, Ordering::SeqCst);
-            })));
-
-            barrier2.wait();
+            }));
             
             while !stop2.load(Ordering::SeqCst) {
-                worker1.share(&worker1.responders[0]);
+                if let Ok(respcon) = worker1.responders[0].try_respond() {
+                    respcon.send(TaskData::OneTask(tasks.pop_front().unwrap()));
+                }
             }
         });
-
-        barrier1.wait();
         
-        if let Some(TaskData::OneTask(task)) = worker2.try_get_tasks(&worker2.requesters[0]) {
-            task.call_box();
-            stop1.store(true, Ordering::SeqCst);
-            handle.join();
+        while !stop1.load(Ordering::SeqCst) {
+            if let Some(TaskData::OneTask(task)) = worker2.try_get_tasks(
+                &worker2.requesters[0]
+            ) {
+                task.call_box();
+                stop1.store(true, Ordering::SeqCst);
+            }
         }
-        else {
-            stop1.store(true, Ordering::SeqCst);
-            handle.join();
 
-            assert!(false);
-        }
+        handle.join().unwrap();
 
         assert_eq!(var.load(Ordering::SeqCst), 1);
     }
@@ -442,9 +435,10 @@ mod tests {
         let var = Arc::new(AtomicUsize::new(0));
         let var1 = var.clone();
 
-        worker1.add_tasks(TaskData::OneTask(Box::new(move || {
+        let mut tasks: VecDeque<Box<Task>> = VecDeque::new();
+        tasks.push_back(Box::new(move || {
             var1.fetch_add(1, Ordering::SeqCst);
-        })));
+        }));
 
         let handle = thread::spawn(move || {
             worker2.acquire_tasks();
@@ -457,10 +451,10 @@ mod tests {
         });
 
         while !stop1.load(Ordering::SeqCst) {
-            worker1.share(&worker1.responders[0]);
+            if let Ok(respcon) = worker1.responders[0].try_respond() {
+                respcon.send(TaskData::OneTask(tasks.pop_front().unwrap()));
+            }
         }
-
-        assert_eq!(worker1.tasks.borrow().len(), 0);
 
         handle.join().unwrap();
 
