@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use super::task::Task;
+use super::Task;
 
 #[derive(Clone, Copy)]
 pub enum ShareStrategy {

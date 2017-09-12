@@ -6,8 +6,7 @@ use rand;
 use rand::{Rng, SeedableRng};
 
 use super::super::rng;
-use super::super::Worker as WorkerTrait;
-use super::super::task::Task;
+use super::super::Task;
 use super::shared::Data as SharedData;
 use super::shared::TryGetTaskError;
 
@@ -32,6 +31,10 @@ impl Worker {
             timeout: config.timeout,
             rng: RefCell::new(rand::XorShiftRng::from_seed(rng::rand_seed())),
         }
+    }
+
+    pub fn add_task(&self, task: Box<Task>) {
+        self.shared_data.add_task(self.index, task);
     }
 
     pub fn run(&self) {
@@ -88,26 +91,14 @@ impl Worker {
     }
 
     #[inline]
-    fn rand_index(&self) -> usize {
-        self.rng.borrow_mut().gen::<usize>()
-            % self.shared_data.get_num_queues()
-    }
-}
-
-impl WorkerTrait for Worker {
-    #[inline]
-    fn get_index(&self) -> usize {
-        self.index
-    }
-
-    #[inline]
     fn signal_exit(&self) {
         self.shared_data.signal_exit(false);
     }
 
     #[inline]
-    fn add_task(&self, task: Box<Task>) {
-        self.shared_data.add_task(self.index, task);
+    fn rand_index(&self) -> usize {
+        self.rng.borrow_mut().gen::<usize>()
+            % self.shared_data.get_num_queues()
     }
 }
 

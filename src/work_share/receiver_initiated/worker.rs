@@ -10,8 +10,7 @@ use rand::{Rng, SeedableRng};
 use reqchan::{Requester, Responder, TryRespondError};
 
 use super::super::super::rng;
-use super::super::super::Worker as WorkerTrait;
-use super::super::super::task::Task;
+use super::super::super::Task;
 use super::super::{ShareStrategy, ReceiverWaitStrategy, TaskData};
 use super::shared::Data as SharedData;
 
@@ -203,26 +202,14 @@ impl Worker {
     }
 
     #[inline]
-    fn rand_index(&self) -> usize {
-        self.rng.borrow_mut().gen::<usize>()
-            % self.responders.len()
-    }
-}
-
-impl WorkerTrait for Worker {
-    #[inline]
-    fn get_index(&self) -> usize {
-        self.index
-    }
-
-    #[inline]
     fn signal_exit(&self) {
         self.shared_data.signal_exit(false);
     }
 
     #[inline]
-    fn add_task(&self, task: Box<Task>) {
-        self.tasks.borrow_mut().push_back(task);
+    fn rand_index(&self) -> usize {
+        self.rng.borrow_mut().gen::<usize>()
+            % self.responders.len()
     }
 }
 
@@ -236,7 +223,7 @@ mod tests {
 
     use reqchan;
     
-    use super::super::super::super::task::Task;
+    use super::super::super::super::Task;
     use super::super::shared::Data as SharedData;
     use super::*;
 

@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::sync::{Barrier, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::super::task::Task;
+use super::super::Task;
 
 pub struct Data {
     queues: Vec<Mutex<VecDeque<Box<Task>>>>,
