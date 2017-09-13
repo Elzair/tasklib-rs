@@ -24,6 +24,7 @@ mod rng;
 
 pub mod work_share;
 pub mod work_steal;
+pub mod work_priority;
 
 #[cfg(test)]
 mod tests {

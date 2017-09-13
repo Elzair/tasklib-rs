@@ -13,8 +13,9 @@ pub struct Pool {
 
 impl Pool {
     pub fn new(num_threads: usize,
+               num_queues: usize,
                timeout: Duration) -> Pool {
-        let shared_data = Arc::new(SharedData::new(num_threads));
+        let shared_data = Arc::new(SharedData::new(num_queues));
 
         let local_worker = Worker::new(WorkerConfig {
             index: 0,

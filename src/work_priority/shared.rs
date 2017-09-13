@@ -16,7 +16,7 @@ pub struct Data {
 impl Data {
     pub fn new(num_workers: usize) -> Data {
         assert!(num_workers > 0);
-
+        
         #[allow(unused_variables)]
         let queues = (0..num_workers).into_iter()
             .map(|n| {
@@ -33,13 +33,26 @@ impl Data {
     }
 
     #[inline]
-    pub fn add_task(&self, index: usize, task: Box<Task>) {
-        self.queues[index].push(task);
+    pub fn add_task(&self, priority: usize, task: Box<Task>) {
+        // If user specified too high of a `priority`, add
+        // `task` to the highest priority queue.
+        let real_priority = match priority < self.queues.len() {
+            true => priority,
+            false => self.queues.len() - 1,
+        };
+
+        self.queues[real_priority].push(task);
     }
 
     #[inline]
-    pub fn try_get_task(&self, index: usize) -> Option<Box<Task>> {
-        self.queues[index].try_pop()
+    pub fn try_get_task(&self) -> Option<Box<Task>> {
+        for queue in self.queues.iter().rev() {
+            if let Some(task) = queue.try_pop() {
+                return Some(task);
+            }
+        }
+
+        return None;
     }
 
     #[inline]
@@ -114,17 +127,55 @@ mod tests {
             var1.fetch_add(1, Ordering::SeqCst);
         }));
 
-        match shared.try_get_task(0) {
+        match shared.try_get_task() {
             Some(task) => { task.call_box(); },
             None => { assert!(false); },
         }
+        if let Some(task) = shared.try_get_task() {
+            task.call_box();
+        }
 
-        match shared.try_get_task(0) {
+        match shared.try_get_task() {
             None => {},
             Some(_) => { assert!(false); },
         }
 
         assert_eq!(var.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_try_get_task_priority() {
+        let shared = Data::new(2);
+
+        let var = Arc::new(AtomicUsize::new(0));
+        let var1 = var.clone();
+        let var2 = var.clone();
+
+        shared.queues[0].push(Box::new(move || {
+            var1.fetch_add(1, Ordering::SeqCst);
+        }));
+        shared.queues[1].push(Box::new(move || {
+            var2.fetch_add(2, Ordering::SeqCst);
+        }));
+
+        match shared.try_get_task() {
+            Some(task) => { task.call_box(); },
+            None => { assert!(false); },
+        }
+
+        assert_eq!(var.load(Ordering::SeqCst), 2);
+
+        match shared.try_get_task() {
+            Some(task) => { task.call_box(); },
+            None => { assert!(false); },
+        }
+
+        assert_eq!(var.load(Ordering::SeqCst), 3);
+
+        match shared.try_get_task() {
+            None => {},
+            Some(_) => { assert!(false); },
+        }
     }
 
     #[test]
