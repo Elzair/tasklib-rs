@@ -134,30 +134,6 @@ fn split_and_filter<T>(mut matrix: Vec<Option<T>>,
         row.into_iter().filter_map(|n| { n }).collect::<Vec<_>>()
     }).collect::<Vec<_>>()
 }
-                                             
-// Return a vector with only Some(T) unwrapped elements.
-#[inline]
-fn filter_vec<T>(v: Vec<Option<T>>) -> Vec<T> {
-    v.into_iter().filter_map(|n| { n }).collect::<Vec<_>>()
-}
-
-// Split a `Vec` into `n` different Vecs of length `r`.
-#[inline]
-fn split_vec<T>(mut v: Vec<T>,
-                num_rows: usize,
-                row_size: usize)
-                -> Vec<Vec<T>> {
-    assert_eq!(num_rows * row_size, v.len());
-
-    let mut res = Vec::<Vec<T>>::with_capacity(num_rows);
-
-    #[allow(unused_variables)]
-    for n in 0..num_rows {
-        res.push(v.drain(0..row_size).collect());
-    }
-
-    res
-}
 
 #[inline]
 fn get_yx(index: usize, row_size: usize) -> (usize, usize) {

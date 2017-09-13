@@ -1,4 +1,5 @@
 
+extern crate crossbeam;
 extern crate itertools;
 extern crate rand;
 extern crate reqchan;
@@ -22,7 +23,7 @@ pub type Task = FnBox + Send + 'static;
 mod rng;
 
 pub mod work_share;
-pub mod work_take;
+pub mod work_steal;
 
 #[cfg(test)]
 mod tests {

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use rand;
 use rand::{Rng, SeedableRng};
-use reqchan::{Requester, Responder, TryReceiveError, TryRespondError};
+use reqchan::{Requester, Responder, TryRespondError};
 
 use super::super::super::rng;
 use super::super::super::Task;

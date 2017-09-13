@@ -8,7 +8,6 @@ use rand::{Rng, SeedableRng};
 use super::super::rng;
 use super::super::Task;
 use super::shared::Data as SharedData;
-use super::shared::TryGetTaskError;
 
 pub struct Config {
     pub index: usize,
@@ -44,19 +43,8 @@ impl Worker {
 
         // Run any remaining tasks if instructed to do so.
         if self.shared_data.should_run_tasks() {
-            let mut is_empty = false;
-
-            while !is_empty {
-                match self.shared_data.try_get_task(self.index) {
-                    Ok(task) => {
-                        task.call_box();
-                    },
-                    Err(TryGetTaskError::Empty) => {
-                        is_empty = true;
-                    },
-                    // Wait for "local" queue to be unlocked.
-                    Err(TryGetTaskError::Locked) => {},
-                }
+            while let Some(task) = self.shared_data.try_get_task(self.index) {
+                task.call_box();
             }
         }
 
@@ -66,7 +54,7 @@ impl Worker {
     
     pub fn run_once(&self) {
         // First, try to execute a task from the "local" queue.
-        if let Ok(task) = self.shared_data.try_get_task(self.index) {
+        if let Some(task) = self.shared_data.try_get_task(self.index) {
             task.call_box();
             return;
         }
@@ -79,7 +67,7 @@ impl Worker {
         while !done {
             let rand_index = self.rand_index();
 
-            if let Ok(task) = self.shared_data.try_get_task(rand_index) {
+            if let Some(task) = self.shared_data.try_get_task(rand_index) {
                 task.call_box();
                 return;
             }
@@ -112,7 +100,7 @@ mod tests {
     use super::*;
 
     fn helper(timeout: Duration) -> (Worker, Worker) {
-        let shared_data = Arc::new(SharedData::new(2, 16));
+        let shared_data = Arc::new(SharedData::new(2));
 
         let worker1 = Worker::new(Config {
             index: 0,
@@ -131,7 +119,7 @@ mod tests {
 
     #[test]
     fn test_make_worker() {
-        let shared_data = Arc::new(SharedData::new(1, 16));
+        let shared_data = Arc::new(SharedData::new(1));
 
         #[allow(unused_variables)]
         let worker = Worker::new(Config {
